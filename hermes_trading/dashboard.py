@@ -79,15 +79,28 @@ def _read_strategy() -> dict:
         return {}
 
 
+def _trade_pnl_usdt(t: dict) -> float:
+    """
+    Return pnl in USDT for a trade.
+    Falls back to pnl_pct × usdt_deployed for old trades that predate the field.
+    """
+    v = t.get("pnl_usdt")
+    if v is not None:
+        return float(v)
+    pnl_pct     = t.get("pnl_pct", 0) or 0
+    deployed    = t.get("usdt_deployed") or t.get("position_size_r", 0.05) * 200
+    return pnl_pct * float(deployed)
+
+
 def _portfolio_stats(trades: list[dict]) -> dict:
     if not trades:
         return {"total_trades": 0, "wins": 0, "losses": 0, "win_rate": 0,
                 "total_pnl_usdt": 0.0, "total_pnl_pct": 0.0, "best_trade": None, "worst_trade": None}
 
-    wins   = [t for t in trades if t.get("pnl_pct", 0) > 0]
-    losses = [t for t in trades if t.get("pnl_pct", 0) <= 0]
-    total_pnl_usdt = sum(t.get("pnl_usdt", 0) for t in trades)
-    total_pnl_pct  = sum(t.get("pnl_pct",  0) for t in trades)
+    wins   = [t for t in trades if (t.get("pnl_pct") or 0) > 0]
+    losses = [t for t in trades if (t.get("pnl_pct") or 0) <= 0]
+    total_pnl_usdt = sum(_trade_pnl_usdt(t) for t in trades)
+    total_pnl_pct  = sum(t.get("pnl_pct", 0) or 0 for t in trades)
 
     best  = max(trades, key=lambda t: t.get("pnl_pct", 0))
     worst = min(trades, key=lambda t: t.get("pnl_pct", 0))
@@ -110,7 +123,7 @@ def _cumulative_pnl(trades: list[dict]) -> list[dict]:
     running = 0.0
     points  = []
     for t in sorted_trades:
-        running += t.get("pnl_usdt", 0)
+        running += _trade_pnl_usdt(t)
         points.append({
             "time":  datetime.fromtimestamp(t["exit_time"], tz=timezone.utc).strftime("%m/%d %H:%M")
                      if t.get("exit_time") else "?",
@@ -326,8 +339,9 @@ function renderPairs(heartbeats) {
     const rsi  = hb.rsi_15m ?? '—';
     const rng  = hb.rng_pos != null ? Math.round(hb.rng_pos * 100) + '%' : null;
     const trend = hb.trend ?? '—';
-    const tsAge = hb.timestamp ? Math.round((Date.now()/1000) - new Date(hb.timestamp).getTime()/1000) : null;
-    const ageStr = tsAge != null ? (tsAge < 120 ? tsAge + 's ago' : Math.round(tsAge/60) + 'm ago') : '';
+    const tsAge = hb.timestamp ? Math.round((Date.now() - new Date(hb.timestamp).getTime()) / 1000) : null;
+    const ageStr = tsAge != null ? (tsAge < 120 ? tsAge + 's ago' : Math.round(tsAge/60) + 'm ago') : '?';
+    const ageColor = tsAge == null ? '#64748b' : tsAge < 90 ? '#34d399' : tsAge < 300 ? '#fbbf24' : '#f87171';
 
     let pnlStr = '';
     if (pos && pos.entry_price && hb.price) {
@@ -347,7 +361,7 @@ function renderPairs(heartbeats) {
       <div class="text-right text-xs text-slate-400">
         <div>$${parseFloat(hb.price || 0).toFixed(4)}</div>
         <div>RSI ${rsi}${rng ? ' · rng ' + rng : ''}</div>
-        <div class="text-slate-600">${ageStr}</div>
+        <div style="color:${ageColor}">${ageStr}</div>
       </div>
     </div>`;
   }).join('');
@@ -358,7 +372,7 @@ function renderTrades(trades) {
   if (!trades.length) return;
   tbody.innerHTML = trades.map(t => {
     const pct  = t.pnl_pct != null ? t.pnl_pct * 100 : null;
-    const usd  = t.pnl_usdt;
+    const usd  = t.pnl_usdt != null ? t.pnl_usdt : (t.pnl_pct != null ? t.pnl_pct * (t.usdt_deployed || 10) : null);
     const dt   = t.exit_time ? new Date(t.exit_time * 1000).toLocaleString() : '—';
     const dir  = t.direction === 'long'
       ? '<span class="pos-long font-semibold">LONG</span>'
