@@ -4,3 +4,8 @@ builder = "dockerfile"
 [deploy]
 region = "asia-southeast1"
 restartPolicyType = "always"
+
+# Expose dashboard on port 8080
+# Railway auto-generates a public URL once this is set
+[[services]]
+internalPort = 8080
