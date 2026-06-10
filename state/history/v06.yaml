@@ -1,0 +1,24 @@
+entry:
+  indicator:       rsi
+  direction:       both         # long, short, or both
+  long_threshold:  25           # 15m RSI below this → long candidate
+  short_threshold: 75           # 15m RSI above this → short candidate
+
+trend_filter:
+  enabled:   true
+  ma_period: 50                 # price above 50MA = uptrend (long ok), below = downtrend (short ok)
+
+mtf:
+  enabled:         true
+  require_signals: 1            # at least 1 HTF signal required to confirm entry
+  # Available HTF signals (any combination can satisfy require_signals):
+  #   4H MACD bullish/bearish crossover or sustained direction
+  #   4H price above/below 50MA (trend alignment)
+  #   1H RSI divergence (bullish or bearish)
+  #   1H MACD crossover
+
+take_profit_pct: 3.0
+stop_loss_pct:   1.8
+position_size_r: 0.05
+
+version: '06'

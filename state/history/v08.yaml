@@ -1,0 +1,39 @@
+entry:
+  indicator:       rsi
+  direction:       both
+  long_threshold:  25
+  short_threshold: 65
+
+trend_filter:
+  enabled:   true
+  ma_period: 50
+
+liquidity_grab:
+  enabled:               true
+  wick_ratio:            2.0    # lower wick must be >= 2x candle body
+  sweep_pct:             0.002  # must sweep prior swing low/high by >= 0.2%
+  overrides_trend_filter: true  # confirmed grab bypasses the trend filter
+
+mtf:
+  enabled:         true
+  require_signals: 1
+
+drawdown:
+  per_pair_cap:  0.10           # pause pair if it loses 10% of its allocated capital
+  portfolio_cap: 0.08           # halt all entries if portfolio drops 8%
+
+# Sideways / ranging regime (ADX < 20 on BTC 1H)
+# Price must be within the bottom or top 20% of the prior-day range to trigger entry.
+# All 3 level sources are computed (PDH/PDL, opening range, swing high/low);
+# swing levels tighten the range if they sit inside the prior-day extremes.
+sideways:
+  adx_threshold:   20.0  # BTC 1H ADX below this = sideways regime
+  range_entry_pct: 0.20  # enter when price is in bottom/top 20% of range
+  or_bars:         4     # opening range = first 4 × 15m candles of UTC day (1 hr)
+  swing_lookback:  20    # bars of 1H candles to look back for swing high/low
+
+take_profit_pct: 3.0
+stop_loss_pct:   1.8
+position_size_r: 0.05
+
+version: '08'

@@ -1,0 +1,6 @@
+[build]
+builder = "dockerfile"
+
+[deploy]
+region = "asia-southeast1"
+restartPolicyType = "always"

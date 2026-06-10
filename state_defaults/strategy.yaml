@@ -1,0 +1,35 @@
+entry:
+  indicator:       rsi
+  direction:       both
+  long_threshold:  25
+  short_threshold: 65
+
+trend_filter:
+  enabled:   true
+  ma_period: 50
+
+liquidity_grab:
+  enabled:               true
+  wick_ratio:            2.0
+  sweep_pct:             0.002
+  overrides_trend_filter: true
+
+mtf:
+  enabled:         true
+  require_signals: 1
+
+drawdown:
+  per_pair_cap:  0.10
+  portfolio_cap: 0.08
+
+sideways:
+  adx_threshold:   20.0
+  range_entry_pct: 0.20
+  or_bars:         4
+  swing_lookback:  20
+
+take_profit_pct: 3.0
+stop_loss_pct:   1.8
+position_size_r: 0.05
+
+version: '08'

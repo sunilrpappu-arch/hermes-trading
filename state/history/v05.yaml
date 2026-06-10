@@ -1,0 +1,14 @@
+entry:
+  indicator: rsi
+  direction: both          # long, short, or both
+  long_threshold: 25       # RSI below this triggers long
+  short_threshold: 75      # RSI above this triggers short
+
+trend_filter:
+  enabled: true
+  ma_period: 50            # only long in uptrend (price > 50MA), short in downtrend (price < 50MA)
+
+take_profit_pct: 3.0
+stop_loss_pct: 1.8
+position_size_r: 0.05
+version: '05'

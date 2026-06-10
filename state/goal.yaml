@@ -1,0 +1,27 @@
+# Hermes will automatically discover ALL active USDT-M perpetual futures on Binance.
+# Use universe_filters to control what gets included.
+universe_filters:
+  min_volume_usdt: 5000000     # minimum $5M/day 24h volume — filters out illiquid junk
+
+# Fallback universe used only if Binance API is unreachable
+universe:
+  - "BTC/USDT"
+  - "ETH/USDT"
+  - "SOL/USDT"
+  - "XRP/USDT"
+  - "HYPE/USDT"
+  - "BNB/USDT"
+  - "DOGE/USDT"
+  - "ADA/USDT"
+  - "AVAX/USDT"
+  - "DOT/USDT"
+
+total_capital_usdt: 1000
+
+target_return_30d: 0.05
+max_drawdown:      0.05
+min_sharpe:        2.0
+failure_below:     -0.04
+
+reflection_every:  5
+one_variable_only: true

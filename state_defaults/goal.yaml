@@ -1,0 +1,24 @@
+universe_filters:
+  min_volume_usdt: 5000000
+
+universe:
+  - "BTC/USDT"
+  - "ETH/USDT"
+  - "SOL/USDT"
+  - "XRP/USDT"
+  - "HYPE/USDT"
+  - "BNB/USDT"
+  - "DOGE/USDT"
+  - "ADA/USDT"
+  - "AVAX/USDT"
+  - "DOT/USDT"
+
+total_capital_usdt: 1000
+
+target_return_30d: 0.05
+max_drawdown:      0.05
+min_sharpe:        2.0
+failure_below:     -0.04
+
+reflection_every:  5
+one_variable_only: true
