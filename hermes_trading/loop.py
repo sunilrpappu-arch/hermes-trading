@@ -36,6 +36,7 @@ from hermes_trading.indicators import (
     range_position,
 )
 from hermes_trading.adapters.candles import closes as get_closes, highs as get_highs, lows as get_lows
+from hermes_trading.notify import send_trade_email
 
 STATE_DIR      = Path(os.getenv("STATE_DIR", Path(__file__).parent.parent / "state"))
 TRADES_FILE    = STATE_DIR / "trades.jsonl"
@@ -396,6 +397,26 @@ class TradingLoop:
                 }
                 self.log_trade(trade)
                 self.open_position = None
+
+                # Email notification
+                all_trades = []
+                try:
+                    for line in TRADES_FILE.read_text().splitlines():
+                        if line.strip():
+                            import json as _json
+                            all_trades.append(_json.loads(line))
+                except Exception:
+                    pass
+                wins   = sum(1 for t in all_trades if t.get("pnl_pct", 0) > 0)
+                losses = len(all_trades) - wins
+                send_trade_email(trade, {
+                    "total_trades":   len(all_trades),
+                    "wins":           wins,
+                    "losses":         losses,
+                    "win_rate":       round(wins / len(all_trades) * 100, 1) if all_trades else 0,
+                    "total_pnl_usdt": round(sum(t.get("pnl_usdt", 0) for t in all_trades), 4),
+                })
+
                 print(f"  ← CLOSE {pos_direction.upper()} {self.asset} @ {current_price:.4f} "
                       f"pnl={pnl_pct:+.3%} [{close_reason}] "
                       f"pair_dd={self._pair_drawdown():.2%} port_dd={PortfolioDrawdown.drawdown():.2%}",
