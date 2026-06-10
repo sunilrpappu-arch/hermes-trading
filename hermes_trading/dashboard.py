@@ -283,7 +283,7 @@ _HTML = r"""<!DOCTYPE html>
       <thead>
         <tr>
           <th>Pair</th><th>Dir</th><th>Entry</th><th>Exit</th>
-          <th>PnL %</th><th>PnL $</th><th>Reason</th><th>Regime</th><th>Strategy</th><th>Time</th>
+          <th>Capital</th><th>Qty</th><th>PnL %</th><th>PnL $</th><th>Reason</th><th>Regime</th><th>Strategy</th><th>Time</th>
         </tr>
       </thead>
       <tbody id="trades-body">
@@ -344,10 +344,15 @@ function renderPairs(heartbeats) {
     const ageColor = tsAge == null ? '#64748b' : tsAge < 90 ? '#34d399' : tsAge < 300 ? '#fbbf24' : '#f87171';
 
     let pnlStr = '';
+    let posDetail = '';
     if (pos && pos.entry_price && hb.price) {
       const mult = pos.direction === 'long' ? 1 : -1;
       const pnlPct = ((hb.price - pos.entry_price) / pos.entry_price) * mult * 100;
-      pnlStr = `<span class="${pnlPct >= 0 ? 'pnl-pos' : 'pnl-neg'} text-xs font-semibold">${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%</span>`;
+      const pnlUsd = pnlPct / 100 * (pos.usdt_deployed || 0);
+      pnlStr = `<span class="${pnlPct >= 0 ? 'pnl-pos' : 'pnl-neg'} text-xs font-semibold">${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% (${pnlUsd >= 0 ? '+' : ''}$${pnlUsd.toFixed(3)})</span>`;
+      const cap = pos.usdt_deployed ? '$' + parseFloat(pos.usdt_deployed).toFixed(2) : '';
+      const qty = pos.qty > 0 ? parseFloat(pos.qty).toPrecision(4) + ' ' + asset.replace('/USDT','') : '';
+      posDetail = cap || qty ? `<div class="text-slate-500 text-xs mt-0.5">${[cap, qty].filter(Boolean).join(' · ')}</div>` : '';
     }
 
     return `
@@ -357,6 +362,7 @@ function renderPairs(heartbeats) {
         <span class="text-slate-400 text-xs ml-1">USDT</span>
         <span class="${posClass} text-xs font-bold ml-2">${posLabel}</span>
         ${pnlStr}
+        ${posDetail}
       </div>
       <div class="text-right text-xs text-slate-400">
         <div>$${parseFloat(hb.price || 0).toFixed(4)}</div>
@@ -384,11 +390,19 @@ function renderTrades(trades) {
     const reason = t.close_reason || '—';
     const regime = t.regime_at_entry || '—';
     const ver    = t.strategy_version ? 'v' + t.strategy_version : '—';
+    const capital = t.usdt_deployed != null ? '$' + parseFloat(t.usdt_deployed).toFixed(2) : '—';
+    const qty     = t.qty != null && t.qty > 0
+      ? parseFloat(t.qty).toPrecision(4)
+      : (t.usdt_deployed && t.entry_price
+          ? (parseFloat(t.usdt_deployed) / parseFloat(t.entry_price)).toPrecision(4)
+          : '—');
     return `<tr>
       <td class="font-medium text-white">${(t.asset||'').replace('/USDT','')}/USDT</td>
       <td>${dir}</td>
       <td>${parseFloat(t.entry_price||0).toFixed(4)}</td>
       <td>${parseFloat(t.exit_price||0).toFixed(4)}</td>
+      <td class="text-slate-300">${capital}</td>
+      <td class="text-slate-400 text-xs">${qty}</td>
       <td>${pnlPct}</td>
       <td>${pnlUsd}</td>
       <td><span class="text-slate-400">${reason}</span></td>
