@@ -205,7 +205,16 @@ def main():
     print(f"[hermes] Total capital: {total_capital} USDT", flush=True)
     print(f"[hermes] Scan interval: {SCAN_INTERVAL}s", flush=True)
 
-    asyncio.run(run_all(universe, total_capital, force_pairs=args.pairs))
+    asyncio.run(_run_with_dashboard(universe, total_capital, force_pairs=args.pairs))
+
+
+async def _run_with_dashboard(universe, total_capital, force_pairs=None):
+    """Run trading coordinator and dashboard server concurrently."""
+    from hermes_trading.dashboard import start as start_dashboard
+    await asyncio.gather(
+        run_all(universe, total_capital, force_pairs=force_pairs),
+        start_dashboard(),
+    )
 
 
 if __name__ == "__main__":
