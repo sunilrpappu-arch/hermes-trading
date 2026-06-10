@@ -1,0 +1,28 @@
+# Environment — NEVER commit real keys
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# State files that change at runtime (kept in Railway volume, not git)
+state/trades*.jsonl
+state/heartbeat_*.json
+state/drawdown.json
+state/.last_notified_count
+state/hypotheses.jsonl
+
+# Keep strategy + goal + history in git (they're config / experiment logs)
+!state/strategy.yaml
+!state/goal.yaml
+!state/history/
