@@ -324,6 +324,12 @@ function regimeLabel(r, sw) {
   return labels[r] || r;
 }
 
+function tvUrl(asset) {
+  const sym = asset.replace('/USDT', '');
+  // Use perpetual futures chart where available, fall back to spot
+  return `https://www.tradingview.com/chart/?symbol=BINANCE:${sym}USDTPERP`;
+}
+
 function renderPairs(heartbeats) {
   const el = document.getElementById('pairs-grid');
   const entries = Object.entries(heartbeats);
@@ -365,7 +371,7 @@ function renderPairs(heartbeats) {
       <div class="rounded-lg px-3 py-3" style="background:#0f1a2e;border:1px solid ${borderCol}">
         <div class="flex items-center justify-between mb-2">
           <div class="flex items-center gap-2">
-            <span class="font-bold text-white text-sm">${asset.replace('/USDT','')}/USDT</span>
+            <a href="${tvUrl(asset)}" target="_blank" class="font-bold text-white text-sm hover:text-indigo-400 transition-colors" title="Open on TradingView">${asset.replace('/USDT','')}/USDT ↗</a>
             <span class="${posClass} text-xs font-bold px-2 py-0.5 rounded-full"
               style="border:1px solid ${borderCol};background:${pos.direction==='long'?'#05966920':'#dc262620'}">${posLabel}</span>
             <span class="text-slate-500 text-xs">${regime}</span>
@@ -401,8 +407,7 @@ function renderPairs(heartbeats) {
     return `
     <div class="flex items-center justify-between bg-slate-900 rounded-lg px-3 py-2">
       <div>
-        <span class="font-semibold text-sm text-white">${asset.replace('/USDT','')}</span>
-        <span class="text-slate-400 text-xs ml-1">USDT</span>
+        <a href="${tvUrl(asset)}" target="_blank" class="font-semibold text-sm text-white hover:text-indigo-400 transition-colors" title="Open on TradingView">${asset.replace('/USDT','')}/USDT ↗</a>
         <span class="${posClass} text-xs font-bold ml-2">${posLabel}</span>
       </div>
       <div class="text-right text-xs text-slate-400">
@@ -438,7 +443,7 @@ function renderTrades(trades) {
           ? (parseFloat(t.usdt_deployed) / parseFloat(t.entry_price)).toPrecision(4)
           : '—');
     return `<tr>
-      <td class="font-medium text-white">${(t.asset||'').replace('/USDT','')}/USDT</td>
+      <td><a href="${tvUrl(t.asset||'')}" target="_blank" class="font-medium text-white hover:text-indigo-400 transition-colors">${(t.asset||'').replace('/USDT','')}/USDT ↗</a></td>
       <td>${dir}</td>
       <td>${parseFloat(t.entry_price||0).toFixed(4)}</td>
       <td>${parseFloat(t.exit_price||0).toFixed(4)}</td>

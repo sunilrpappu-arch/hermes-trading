@@ -35,10 +35,12 @@ def bootstrap_state():
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     (STATE_DIR / "history").mkdir(parents=True, exist_ok=True)
 
+    # goal.yaml and strategy.yaml are config — always overwrite from defaults
+    _ALWAYS_OVERWRITE = {"goal.yaml", "strategy.yaml"}
     if DEFAULTS_DIR.exists():
         for src in DEFAULTS_DIR.glob("*.yaml"):
             dst = STATE_DIR / src.name
-            if not dst.exists() or src.name == "goal.yaml":
+            if not dst.exists() or src.name in _ALWAYS_OVERWRITE:
                 shutil.copy(src, dst)
                 print(f"[bootstrap] copied {src.name} → {dst}", flush=True)
     else:
