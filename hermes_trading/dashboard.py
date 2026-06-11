@@ -303,6 +303,25 @@ async def api_control(request: Request):
 
 
 # ---------------------------------------------------------------------------
+# Telegram test endpoint
+# ---------------------------------------------------------------------------
+
+@app.get("/api/test-telegram")
+async def api_test_telegram():
+    """Send a test Telegram message to verify bot config."""
+    from hermes_trading.notify import _send_telegram
+    ok = _send_telegram(
+        "✅ <b>Hermes Telegram test</b>\n\nNotifications are working correctly!"
+    )
+    if ok:
+        return JSONResponse({"ok": True, "message": "Test message sent — check Telegram!"})
+    return JSONResponse(
+        {"ok": False, "message": "Failed — check TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in Railway env vars"},
+        status_code=500,
+    )
+
+
+# ---------------------------------------------------------------------------
 # HTML dashboard
 # ---------------------------------------------------------------------------
 
@@ -399,6 +418,10 @@ _HTML = r"""<!DOCTYPE html>
     <button onclick="doResume()"
       class="flex items-center gap-2 px-4 py-2 rounded-lg font-semibold text-sm bg-emerald-950 hover:bg-emerald-900 text-emerald-300 border border-emerald-800 transition-colors">
       ▶ RESUME TRADING
+    </button>
+    <button onclick="doTestTelegram()"
+      class="flex items-center gap-2 px-4 py-2 rounded-lg font-semibold text-sm bg-blue-950 hover:bg-blue-900 text-blue-300 border border-blue-800 transition-colors">
+      📨 TEST TELEGRAM
     </button>
   </div>
 
@@ -890,6 +913,17 @@ async function doAllStop() {
 async function doResume() {
   const res = await ctrlPost({action: 'resume'});
   if (res) { showToast('▶ Trading resumed'); refresh(); }
+}
+
+async function doTestTelegram() {
+  showToast('📨 Sending test message…');
+  try {
+    const r = await fetch('/api/test-telegram');
+    const j = await r.json();
+    showToast(j.ok ? '✅ ' + j.message : '❌ ' + j.message, j.ok ? 'green' : 'red');
+  } catch(e) {
+    showToast('❌ Request failed: ' + e, 'red');
+  }
 }
 
 async function doForceExit(asset) {

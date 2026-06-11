@@ -1,6 +1,10 @@
-# v10 — Regime-separated strategy with dynamic leverage + manual controls
+# v11 — Breakout/breakdown entries + RSI divergence signals
 # Each pair is classified independently (bull/bear/sideways) using its own 4H ADX + 50MA.
-# Different entry rules apply per regime. MTF is informational only (no hard gate).
+# New in v11:
+#   - Bull regime: breakout long above resistance; false-breakout short; bearish RSI divergence short
+#   - Bear regime: breakdown short below support; false-breakdown long; bullish RSI divergence long
+#   - Shorts in bull regime blocked while active breakout is occurring (don't fight momentum)
+#   - Longs in bear regime blocked while active breakdown is occurring
 
 # Bull regime: price above 50MA on 4H, ADX >= 20
 bull:
@@ -61,4 +65,4 @@ take_profit_pct: 3.0
 stop_loss_pct:   1.8
 position_size_r: 0.05
 
-version: '10'
+version: '11'

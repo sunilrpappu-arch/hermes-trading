@@ -427,6 +427,69 @@ def range_position(price: float, range_high: float, range_low: float) -> float:
     return max(0.0, min(1.0, (price - range_low) / (range_high - range_low)))
 
 
+def breakout_detector(
+    candles: list[dict],
+    lookback: int = 20,
+    confirm_pct: float = 0.001,
+) -> dict:
+    """
+    Detect price breakouts above resistance or breakdowns below support.
+
+    Uses the highest high / lowest low of the prior `lookback` candles
+    (excluding the most recent candle being evaluated).
+
+    'breakout'        — candle closes above prior resistance (bullish momentum)
+    'breakdown'       — candle closes below prior support   (bearish momentum)
+    'false_breakout'  — wick above resistance, closed back below with bearish body
+                        → failed breakout = short signal
+    'false_breakdown' — wick below support, closed back above with bullish body
+                        → failed breakdown = long signal
+    """
+    empty = {
+        "breakout": False, "breakdown": False,
+        "false_breakout": False, "false_breakdown": False,
+        "resistance": 0.0, "support": 0.0,
+    }
+    if len(candles) < lookback + 2:
+        return empty
+
+    prior      = candles[-(lookback + 1):-1]
+    last       = candles[-1]
+    resistance = max(c["high"] for c in prior)
+    support    = min(c["low"]  for c in prior)
+
+    close = last["close"]
+    high  = last["high"]
+    low   = last["low"]
+    open_ = last["open"]
+
+    breakout  = close > resistance * (1 + confirm_pct)
+    breakdown = close < support    * (1 - confirm_pct)
+
+    # False breakout: spiked above resistance but closed back below with a bearish candle
+    false_breakout = (
+        high  > resistance * (1 + confirm_pct)
+        and close < resistance
+        and close < open_
+    )
+
+    # False breakdown: spiked below support but closed back above with a bullish candle
+    false_breakdown = (
+        low   < support * (1 - confirm_pct)
+        and close > support
+        and close > open_
+    )
+
+    return {
+        "breakout":        breakout,
+        "breakdown":       breakdown,
+        "false_breakout":  false_breakout,
+        "false_breakdown": false_breakdown,
+        "resistance":      round(resistance, 8),
+        "support":         round(support, 8),
+    }
+
+
 def realized_vol(closes: list[float], period: int = 24) -> float | None:
     """
     Realized volatility as std-dev of log returns over `period` bars.
