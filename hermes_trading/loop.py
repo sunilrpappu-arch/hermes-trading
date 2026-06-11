@@ -290,7 +290,8 @@ class TradingLoop:
         self._realised_pnl_usdt += pnl_usdt
         if self._realised_pnl_usdt > self._pair_peak_usdt:
             self._pair_peak_usdt = self._realised_pnl_usdt
-        PortfolioDrawdown.record_trade(pnl_usdt, self.capital_usdt)
+        total_capital = float(os.getenv("TOTAL_CAPITAL_USDT", "1000"))
+        PortfolioDrawdown.record_trade(pnl_usdt, total_capital)
         DailyLossGuard.record(pnl_usdt)
         # Start cooldown timer on stop-loss exits
         if close_reason == "stop_loss":
@@ -626,7 +627,7 @@ class TradingLoop:
                 and not in_cooldown
                 and not self._pair_halted(pair_dd_cap)
                 and not PortfolioDrawdown.is_halted(portfolio_dd_cap)
-                and not DailyLossGuard.is_halted(daily_loss_cap, self.capital_usdt)):
+                and not DailyLossGuard.is_halted(daily_loss_cap, float(os.getenv("TOTAL_CAPITAL_USDT", "1000")))):
 
             usdt_to_deploy = self._deploy_usdt(position_size_r, regime_params)
             # qty with leverage: same capital, larger notional position

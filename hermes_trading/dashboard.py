@@ -751,7 +751,7 @@ async function refresh() {
     document.getElementById('strategy-ver').textContent = ver ? 'v' + ver : '';
 
     // Total capital + deployed
-    const totalCap = data.drawdown?.total_capital || data.total_capital_usdt || 1000;
+    const totalCap = data.total_capital_usdt || data.drawdown?.total_capital || 1000;
     const deployed = Object.values(data.heartbeats || {})
       .filter(hb => hb.open_position)
       .reduce((s, hb) => s + parseFloat(hb.open_position.usdt_deployed || 0), 0);
