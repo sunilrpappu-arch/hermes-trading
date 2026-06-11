@@ -595,7 +595,7 @@ function renderPairs(heartbeats) {
           <div class="h-1.5 rounded-full transition-all duration-500" data-live-asset="${asset}" data-field="bar" style="width:${barPct}%;background:${pnlColor}"></div>
         </div>
         <div class="flex justify-between" style="font-size:0.65rem;color:#475569">
-          <span>SL -${slPct}%</span>
+          <span>SL -${parseFloat(slPct).toFixed(2)}%</span>
           <span data-live-asset="${asset}" data-field="barlabel">${pnlPct>=0?'+':''}${pnlPct.toFixed(2)}% of ${tpPct}% target</span>
           <span>TP +${tpPct}%</span>
         </div>
