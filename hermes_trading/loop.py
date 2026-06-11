@@ -245,6 +245,30 @@ class TradingLoop:
     # Helpers
     # ------------------------------------------------------------------
 
+    def _position_file(self) -> Path:
+        safe = self.asset.replace("/", "_")
+        return STATE_DIR / f"position_{safe}.json"
+
+    def _save_position(self):
+        """Persist open position to disk so it survives restarts."""
+        pf = self._position_file()
+        if self.open_position:
+            pf.write_text(json.dumps(self.open_position, indent=2))
+        else:
+            pf.unlink(missing_ok=True)
+
+    def _load_position(self):
+        """Restore open position from disk on startup."""
+        pf = self._position_file()
+        if pf.exists():
+            try:
+                self.open_position = json.loads(pf.read_text())
+                print(f"[{self.asset}] restored open position from disk: "
+                      f"{self.open_position['direction']} @ {self.open_position['entry_price']}", flush=True)
+            except Exception as e:
+                print(f"[{self.asset}] failed to restore position: {e}", flush=True)
+                self.open_position = None
+
     def _trades_file(self) -> Path:
         safe = self.asset.replace("/", "_")
         return STATE_DIR / f"trades_{safe}.jsonl"
@@ -467,6 +491,7 @@ class TradingLoop:
                 }
                 self.log_trade(trade)
                 self.open_position = None
+                self._save_position()
 
                 # Email notification
                 all_trades = []
@@ -641,6 +666,7 @@ class TradingLoop:
                     "strategy_version":   strategy.get("version", "unknown"),
                     "mode":               "live" if is_live() else "paper",
                 }
+                self._save_position()
                 signals_str = ", ".join(htf_reasons + ([lq_note] if lq_note else []))
                 print(f"  → ENTRY {new_direction.upper()} {self.asset} @ {current_price:.4f} "
                       f"lev={entry_leverage}x notional=${usdt_to_deploy*entry_leverage:.0f} "
@@ -688,6 +714,7 @@ class TradingLoop:
         mode_tag = "[LIVE]" if is_live() else "[paper]"
         print(f"Booting {mode_tag} [{self.asset}] capital={self.capital_usdt} USDT", flush=True)
         STATE_DIR.mkdir(parents=True, exist_ok=True)
+        self._load_position()   # restore any open position that survived a restart
 
         if market_queue is not None:
             while True:
