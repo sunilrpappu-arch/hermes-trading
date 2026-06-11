@@ -617,7 +617,7 @@ function renderPairs(heartbeats) {
               <option value="2" ${pos_leverage==2?'selected':''}>2x</option>
               <option value="3" ${pos_leverage==3?'selected':''}>3x</option>
             </select>
-            <span class="text-slate-400 text-xs">(now ${pos_leverage}x · notional $${(parseFloat(pos.notional_usdt||deployed)).toFixed(0)})</span>
+            <span class="text-slate-400 text-xs">(now ${pos_leverage}x · notional $${(pos_leverage * deployed).toFixed(0)})</span>
           </div>
         </div>
       </div>`;
