@@ -137,9 +137,15 @@ async def run_all(universe: list[str], total_capital: float, force_pairs: list[s
             live_universe = await fetch_universe(filters=goal.get("universe_filters", {}))
             selected  = await scan_pairs(live_universe, regime_info["max_pairs"], regime_info.get("vol", 0.02))
 
-        # 3. Retire loops no longer selected
+        # 3. Retire loops no longer selected — but NEVER retire a pair with an open position
         for pair in list(loops.keys()):
             if pair not in selected:
+                loop = loops[pair]
+                if loop.open_position:
+                    # Keep the loop alive until position closes
+                    print(f"[coordinator] keeping {pair} — open position, will retire after close", flush=True)
+                    selected.append(pair)   # add back so market data keeps flowing
+                    continue
                 print(f"[coordinator] retiring {pair}", flush=True)
                 if tasks.get(pair) and not tasks[pair].done():
                     tasks[pair].cancel()
