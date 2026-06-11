@@ -545,49 +545,70 @@ class TradingLoop:
                 consume_pending_entry(self.asset)
                 print(f"  [MANUAL] Entry {new_direction.upper()} {self.asset} lev={entry_leverage}x", flush=True)
 
-            elif pair_regime == "bull":
-                bull_long_thr = bull_cfg.get("long_threshold", 35)
-                if rsi_15m < bull_long_thr and trend == "uptrend":
-                    _, htf_reasons = self._htf_signals_long(candles)
-                    new_direction  = "long"
-                elif bull_cfg.get("short_on_lq_only", True) and lq_bear:
-                    lq_note       = f"lq_grab_bear(wick={lq['wick_pct']:.3%})"
-                    _, htf_reasons = self._htf_signals_short(candles)
-                    new_direction  = "short"
+            else:
+                # ── RANGE EXTREME OVERRIDE ─────────────────────────────────
+                # Fires regardless of pair_regime when price is at PDH/PDL extreme
+                # AND RSI confirms. This catches overbought/oversold pairs that the
+                # regime gate would otherwise miss (e.g. DOGE bull-regime rng=87% RSI=74).
+                range_override_fired = False
+                range_short_rsi = 65   # RSI > this at range top  → short
+                range_long_rsi  = 35   # RSI < this at range bottom → long
+                if rng_pos is not None and rng_high and rng_low and (rng_high - rng_low) > 0:
+                    if rng_pos >= (1.0 - sw_entry_pct) and rsi_15m > range_short_rsi:
+                        lq_note             = f"range_extreme_short({rng_pos:.0%} rsi={rsi_15m:.0f})"
+                        _, htf_reasons      = self._htf_signals_short(candles)
+                        new_direction       = "short"
+                        range_override_fired = True
+                    elif rng_pos <= sw_entry_pct and rsi_15m < range_long_rsi:
+                        lq_note             = f"range_extreme_long({rng_pos:.0%} rsi={rsi_15m:.0f})"
+                        _, htf_reasons      = self._htf_signals_long(candles)
+                        new_direction       = "long"
+                        range_override_fired = True
 
-            elif pair_regime == "bear":
-                bear_short_thr = bear_cfg.get("short_threshold", 60)
-                if rsi_15m > bear_short_thr and trend == "downtrend":
-                    _, htf_reasons = self._htf_signals_short(candles)
-                    new_direction  = "short"
-                elif bear_cfg.get("long_on_lq_only", True) and lq_bull:
-                    lq_note       = f"lq_grab_bull(wick={lq['wick_pct']:.3%})"
-                    _, htf_reasons = self._htf_signals_long(candles)
-                    new_direction  = "long"
-
-            elif pair_regime == "sideways":
-                if rng_pos is not None and rng_high and rng_low:
-                    rng_total = rng_high - rng_low
-                    if rng_total > 0:
-                        if rng_pos <= sw_entry_pct:
-                            lq_note       = f"range_bottom({rng_pos:.1%})"
+                if not range_override_fired:
+                    if pair_regime == "bull":
+                        bull_long_thr = bull_cfg.get("long_threshold", 35)
+                        if rsi_15m < bull_long_thr and trend == "uptrend":
                             _, htf_reasons = self._htf_signals_long(candles)
                             new_direction  = "long"
-                        elif rng_pos >= (1.0 - sw_entry_pct):
-                            lq_note       = f"range_top({rng_pos:.1%})"
+                        elif bull_cfg.get("short_on_lq_only", True) and lq_bear:
+                            lq_note       = f"lq_grab_bear(wick={lq['wick_pct']:.3%})"
                             _, htf_reasons = self._htf_signals_short(candles)
                             new_direction  = "short"
 
-            else:
-                # neutral / warming up fallback
-                if rsi_15m < 30 and (trend == "uptrend" or lq_bull):
-                    lq_note = f"lq_grab(wick={lq['wick_pct']:.3%})" if lq_bull and trend != "uptrend" else ""
-                    _, htf_reasons = self._htf_signals_long(candles)
-                    new_direction  = "long"
-                elif rsi_15m > 70 and (trend == "downtrend" or lq_bear):
-                    lq_note = f"lq_grab(wick={lq['wick_pct']:.3%})" if lq_bear and trend != "downtrend" else ""
-                    _, htf_reasons = self._htf_signals_short(candles)
-                    new_direction  = "short"
+                    elif pair_regime == "bear":
+                        bear_short_thr = bear_cfg.get("short_threshold", 60)
+                        if rsi_15m > bear_short_thr and trend == "downtrend":
+                            _, htf_reasons = self._htf_signals_short(candles)
+                            new_direction  = "short"
+                        elif bear_cfg.get("long_on_lq_only", True) and lq_bull:
+                            lq_note       = f"lq_grab_bull(wick={lq['wick_pct']:.3%})"
+                            _, htf_reasons = self._htf_signals_long(candles)
+                            new_direction  = "long"
+
+                    elif pair_regime == "sideways":
+                        if rng_pos is not None and rng_high and rng_low:
+                            rng_total = rng_high - rng_low
+                            if rng_total > 0:
+                                if rng_pos <= sw_entry_pct:
+                                    lq_note       = f"range_bottom({rng_pos:.1%})"
+                                    _, htf_reasons = self._htf_signals_long(candles)
+                                    new_direction  = "long"
+                                elif rng_pos >= (1.0 - sw_entry_pct):
+                                    lq_note       = f"range_top({rng_pos:.1%})"
+                                    _, htf_reasons = self._htf_signals_short(candles)
+                                    new_direction  = "short"
+
+                    else:
+                        # neutral / warming up fallback
+                        if rsi_15m < 30 and (trend == "uptrend" or lq_bull):
+                            lq_note = f"lq_grab(wick={lq['wick_pct']:.3%})" if lq_bull and trend != "uptrend" else ""
+                            _, htf_reasons = self._htf_signals_long(candles)
+                            new_direction  = "long"
+                        elif rsi_15m > 70 and (trend == "downtrend" or lq_bear):
+                            lq_note = f"lq_grab(wick={lq['wick_pct']:.3%})" if lq_bear and trend != "downtrend" else ""
+                            _, htf_reasons = self._htf_signals_short(candles)
+                            new_direction  = "short"
 
             if new_direction:
                 if is_live():
