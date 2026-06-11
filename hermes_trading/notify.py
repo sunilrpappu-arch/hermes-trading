@@ -13,17 +13,18 @@ import ssl
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-GMAIL_TO       = os.getenv("GMAIL_TO", "")
-GMAIL_FROM     = os.getenv("GMAIL_FROM", GMAIL_TO)
-GMAIL_PASSWORD = os.getenv("GMAIL_APP_PASSWORD", "")
-
-
 def send_trade_email(trade: dict, stats: dict):
     """
     Send an email notification when a trade closes.
+    Reads credentials fresh from env vars each call (Railway sets them at runtime).
     Silently skips if credentials are not configured.
     """
-    if not GMAIL_TO or not GMAIL_PASSWORD:
+    gmail_to       = os.getenv("GMAIL_TO", "")
+    gmail_from     = os.getenv("GMAIL_FROM", gmail_to)
+    gmail_password = os.getenv("GMAIL_APP_PASSWORD", "")
+
+    if not gmail_to or not gmail_password:
+        print(f"[notify] skipping email — GMAIL_TO or GMAIL_APP_PASSWORD not set", flush=True)
         return
 
     try:
@@ -77,16 +78,16 @@ Dashboard: https://hermes-trading-production-bcda.up.railway.app
 
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
-        msg["From"]    = GMAIL_FROM
-        msg["To"]      = GMAIL_TO
+        msg["From"]    = gmail_from
+        msg["To"]      = gmail_to
         msg.attach(MIMEText(body, "plain"))
 
         context = ssl.create_default_context()
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:
-            server.login(GMAIL_FROM, GMAIL_PASSWORD)
-            server.sendmail(GMAIL_FROM, GMAIL_TO, msg.as_string())
+            server.login(gmail_from, gmail_password)
+            server.sendmail(gmail_from, gmail_to, msg.as_string())
 
-        print(f"[notify] email sent → {GMAIL_TO} ({subject})", flush=True)
+        print(f"[notify] email sent → {gmail_to} ({subject})", flush=True)
 
     except Exception as e:
         print(f"[notify] email failed: {e}", flush=True)
