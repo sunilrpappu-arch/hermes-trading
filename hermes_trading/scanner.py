@@ -34,6 +34,13 @@ _EXCLUDE_CONTAINS = [
     "DEFI", "NFTUSDT",                      # index products
 ]
 
+# Exact symbols to always exclude — tokenised commodities/metals that behave
+# differently from crypto and cause candle fetch issues on Binance perps
+_EXCLUDE_EXACT = {
+    "XAUT/USDT",   # tokenised gold — illiquid candles, stale data
+    "PAXG/USDT",   # tokenised gold — same issues
+}
+
 # Minimum 24h quote volume in USDT to be considered liquid enough
 _MIN_VOLUME_USDT = 5_000_000   # $5M/day
 
@@ -60,6 +67,7 @@ async def fetch_universe(filters: dict = None) -> list[str]:
     try:
         pairs = await _fetch_from_binance(min_vol)
         if pairs:
+            pairs = [p for p in pairs if p not in _EXCLUDE_EXACT]
             _universe_cache    = pairs
             _universe_cache_ts = now
             print(f"[scanner] Universe refreshed: {len(pairs)} pairs from Binance futures", flush=True)
