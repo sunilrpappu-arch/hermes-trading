@@ -270,10 +270,32 @@ _HTML = r"""<!DOCTYPE html>
 
   <!-- Active pairs -->
   <div class="card">
-    <p class="text-slate-400 text-xs font-semibold mb-3">ACTIVE PAIRS</p>
+    <p class="text-slate-400 text-xs font-semibold mb-3">ACTIVE PAIRS <span class="text-slate-600 font-normal">(click pair to load chart)</span></p>
     <div id="pairs-grid" class="space-y-3"></div>
   </div>
 
+</div>
+
+<!-- TradingView Chart -->
+<div class="card mb-6">
+  <div class="flex items-center justify-between mb-3">
+    <p class="text-slate-400 text-xs font-semibold">CHART — <span id="chart-symbol-label" class="text-white">BTC/USDT</span></p>
+    <div class="flex items-center gap-2">
+      <select id="chart-interval" onchange="reloadChart()"
+        class="bg-slate-800 text-slate-300 text-xs rounded px-2 py-1 border border-slate-700">
+        <option value="15">15m</option>
+        <option value="60" selected>1H</option>
+        <option value="240">4H</option>
+        <option value="D">1D</option>
+      </select>
+      <a id="tv-expand-btn" href="https://www.tradingview.com/chart/?symbol=BINANCE:BTCUSDTPERP"
+        target="_blank"
+        class="flex items-center gap-1 text-xs text-slate-400 hover:text-white border border-slate-700 rounded px-2 py-1 transition-colors">
+        ↗ Open in TradingView
+      </a>
+    </div>
+  </div>
+  <div id="tv-chart-container" style="height:480px;"></div>
 </div>
 
 <!-- Recent trades -->
@@ -368,7 +390,8 @@ function renderPairs(heartbeats) {
       const borderCol = pos.direction === 'long' ? '#065f46' : '#7f1d1d';
 
       return `
-      <div class="rounded-lg px-3 py-3" style="background:#0f1a2e;border:1px solid ${borderCol}">
+      <div class="rounded-lg px-3 py-3" style="background:#0f1a2e;border:1px solid ${borderCol};cursor:pointer"
+           onclick="loadChart('${asset}')" title="Click to load chart">
         <div class="flex items-center justify-between mb-2">
           <div class="flex items-center gap-2">
             <a href="${tvUrl(asset)}" target="_blank" class="font-bold text-white text-sm hover:text-indigo-400 transition-colors" title="Open on TradingView">${asset.replace('/USDT','')}/USDT ↗</a>
@@ -405,9 +428,10 @@ function renderPairs(heartbeats) {
 
     // ── COMPACT card for flat pairs ──
     return `
-    <div class="flex items-center justify-between bg-slate-900 rounded-lg px-3 py-2">
+    <div class="flex items-center justify-between bg-slate-900 rounded-lg px-3 py-2 cursor-pointer hover:bg-slate-800 transition-colors"
+         onclick="loadChart('${asset}')" title="Click to load chart">
       <div>
-        <a href="${tvUrl(asset)}" target="_blank" class="font-semibold text-sm text-white hover:text-indigo-400 transition-colors" title="Open on TradingView">${asset.replace('/USDT','')}/USDT ↗</a>
+        <span class="font-semibold text-sm text-white">${asset.replace('/USDT','')}/USDT</span>
         <span class="${posClass} text-xs font-bold ml-2">${posLabel}</span>
       </div>
       <div class="text-right text-xs text-slate-400">
@@ -561,6 +585,72 @@ async function refresh() {
 // Initial load + 30s polling
 refresh();
 setInterval(refresh, 30000);
+</script>
+
+<!-- TradingView widget library -->
+<script src="https://s3.tradingview.com/tv.js"></script>
+<script>
+let _currentTvSymbol = 'BINANCE:BTCUSDTPERP';
+let _tvWidget = null;
+
+function tvSymbol(asset) {
+  const sym = (asset || 'BTC/USDT').replace('/USDT', '');
+  return `BINANCE:${sym}USDTPERP`;
+}
+
+function loadChart(asset) {
+  const sym  = tvSymbol(asset);
+  const ivEl = document.getElementById('chart-interval');
+  const iv   = ivEl ? ivEl.value : '60';
+
+  _currentTvSymbol = sym;
+
+  // Update label and expand link
+  document.getElementById('chart-symbol-label').textContent = (asset || 'BTC/USDT').replace('/USDT', '') + '/USDT';
+  document.getElementById('tv-expand-btn').href =
+    `https://www.tradingview.com/chart/?symbol=${sym}`;
+
+  // Clear and recreate widget
+  const container = document.getElementById('tv-chart-container');
+  container.innerHTML = '';
+  const div = document.createElement('div');
+  div.id = 'tv_widget_inner';
+  container.appendChild(div);
+
+  if (typeof TradingView === 'undefined') return;
+
+  _tvWidget = new TradingView.widget({
+    container_id:       'tv_widget_inner',
+    symbol:             sym,
+    interval:           iv,
+    timezone:           'Etc/UTC',
+    theme:              'dark',
+    style:              '1',
+    locale:             'en',
+    width:              '100%',
+    height:             480,
+    hide_top_toolbar:   false,
+    hide_legend:        false,
+    allow_symbol_change: false,
+    save_image:         false,
+    studies: [
+      'RSI@tv-basicstudies',
+      'MACD@tv-basicstudies',
+    ],
+  });
+}
+
+function reloadChart() {
+  // Re-load with current symbol + new interval
+  const sym   = _currentTvSymbol;
+  const asset = sym.replace('BINANCE:', '').replace('USDTPERP', '') + '/USDT';
+  loadChart(asset);
+}
+
+// Load default chart after TV library is ready
+window.addEventListener('load', () => {
+  setTimeout(() => loadChart('BTC/USDT'), 800);
+});
 </script>
 </body>
 </html>
