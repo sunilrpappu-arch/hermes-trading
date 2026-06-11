@@ -332,38 +332,78 @@ function renderPairs(heartbeats) {
     return;
   }
   el.innerHTML = entries.map(([asset, hb]) => {
-    const pos     = hb.open_position;
-    const posDir  = pos ? pos.direction : null;
+    const pos      = hb.open_position;
+    const posDir   = pos ? pos.direction : null;
     const posClass = posDir === 'long' ? 'pos-long' : posDir === 'short' ? 'pos-short' : 'pos-none';
     const posLabel = posDir ? posDir.toUpperCase() : 'FLAT';
-
-    const rsi  = hb.rsi_15m ?? '—';
-    const rng  = hb.rng_pos != null ? Math.round(hb.rng_pos * 100) + '%' : null;
-    const trend = hb.trend ?? '—';
-    const tsAge = hb.timestamp ? Math.round((Date.now() - new Date(hb.timestamp).getTime()) / 1000) : null;
-    const ageStr = tsAge != null ? (tsAge < 120 ? tsAge + 's ago' : Math.round(tsAge/60) + 'm ago') : '?';
+    const rsi      = hb.rsi_15m ?? '—';
+    const rng      = hb.rng_pos != null ? Math.round(hb.rng_pos * 100) + '%' : null;
+    const tsAge    = hb.timestamp ? Math.round((Date.now() - new Date(hb.timestamp).getTime()) / 1000) : null;
+    const ageStr   = tsAge != null ? (tsAge < 120 ? tsAge + 's ago' : Math.round(tsAge/60) + 'm ago') : '?';
     const ageColor = tsAge == null ? '#64748b' : tsAge < 90 ? '#34d399' : tsAge < 300 ? '#fbbf24' : '#f87171';
 
-    let pnlStr = '';
-    let posDetail = '';
     if (pos && pos.entry_price && hb.price) {
-      const mult = pos.direction === 'long' ? 1 : -1;
-      const pnlPct = ((hb.price - pos.entry_price) / pos.entry_price) * mult * 100;
-      const pnlUsd = pnlPct / 100 * (pos.usdt_deployed || 0);
-      pnlStr = `<span class="${pnlPct >= 0 ? 'pnl-pos' : 'pnl-neg'} text-xs font-semibold">${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% (${pnlUsd >= 0 ? '+' : ''}$${pnlUsd.toFixed(3)})</span>`;
-      const cap = pos.usdt_deployed ? '$' + parseFloat(pos.usdt_deployed).toFixed(2) : '';
-      const qty = pos.qty > 0 ? parseFloat(pos.qty).toPrecision(4) + ' ' + asset.replace('/USDT','') : '';
-      posDetail = cap || qty ? `<div class="text-slate-500 text-xs mt-0.5">${[cap, qty].filter(Boolean).join(' · ')}</div>` : '';
+      // ── EXPANDED card for open position ──
+      const mult     = pos.direction === 'long' ? 1 : -1;
+      const entry    = parseFloat(pos.entry_price);
+      const current  = parseFloat(hb.price);
+      const pnlPct   = ((current - entry) / entry) * mult * 100;
+      const deployed = parseFloat(pos.usdt_deployed || 0);
+      const pnlUsd   = pnlPct / 100 * deployed;
+      const qty      = pos.qty > 0 ? parseFloat(pos.qty) : (entry > 0 ? deployed / entry : 0);
+      const slPct    = parseFloat(pos.stop_loss_pct   || hb.regime_params?.stop_loss_pct   || 1.8);
+      const tpPct    = parseFloat(pos.take_profit_pct || hb.regime_params?.take_profit_pct || 3.0);
+      const slPrice  = pos.direction === 'long' ? entry*(1-slPct/100) : entry*(1+slPct/100);
+      const tpPrice  = pos.direction === 'long' ? entry*(1+tpPct/100) : entry*(1-tpPct/100);
+      const pnlColor = pnlPct >= 0 ? '#34d399' : '#f87171';
+      const barPct   = Math.min(Math.abs(pnlPct) / tpPct * 100, 100).toFixed(1);
+      const signals  = (pos.htf_signals || []).join(', ') || null;
+      const regime   = pos.pair_regime || '—';
+      const borderCol = pos.direction === 'long' ? '#065f46' : '#7f1d1d';
+
+      return `
+      <div class="rounded-lg px-3 py-3" style="background:#0f1a2e;border:1px solid ${borderCol}">
+        <div class="flex items-center justify-between mb-2">
+          <div class="flex items-center gap-2">
+            <span class="font-bold text-white text-sm">${asset.replace('/USDT','')}/USDT</span>
+            <span class="${posClass} text-xs font-bold px-2 py-0.5 rounded-full"
+              style="border:1px solid ${borderCol};background:${pos.direction==='long'?'#05966920':'#dc262620'}">${posLabel}</span>
+            <span class="text-slate-500 text-xs">${regime}</span>
+          </div>
+          <div style="color:${ageColor}" class="text-xs">${ageStr}</div>
+        </div>
+
+        <div class="grid grid-cols-3 gap-x-3 gap-y-1 text-xs mb-3">
+          <div><span class="text-slate-500">Entry </span><span class="text-white font-mono">$${entry.toFixed(6)}</span></div>
+          <div><span class="text-slate-500">Now </span><span class="text-white font-mono">$${current.toFixed(6)}</span></div>
+          <div><span class="text-slate-500">PnL </span><span class="font-bold font-mono" style="color:${pnlColor}">${pnlPct>=0?'+':''}${pnlPct.toFixed(3)}%</span></div>
+          <div><span class="text-slate-500">Capital </span><span class="text-slate-300">$${deployed.toFixed(2)}</span></div>
+          <div><span class="text-slate-500">Qty </span><span class="text-slate-300">${qty.toPrecision(4)} ${asset.replace('/USDT','')}</span></div>
+          <div><span class="text-slate-500">PnL$ </span><span class="font-mono" style="color:${pnlColor}">${pnlUsd>=0?'+':''}$${pnlUsd.toFixed(4)}</span></div>
+          <div><span class="text-slate-500">Stop </span><span class="text-red-400 font-mono">$${slPrice.toFixed(6)}</span></div>
+          <div><span class="text-slate-500">Target </span><span class="text-emerald-400 font-mono">$${tpPrice.toFixed(6)}</span></div>
+          <div><span class="text-slate-500">RSI </span><span class="text-slate-300">${rsi}${rng?' · '+rng:''}</span></div>
+        </div>
+
+        <div class="w-full rounded-full h-1.5 mb-1" style="background:#1e293b">
+          <div class="h-1.5 rounded-full transition-all duration-500" style="width:${barPct}%;background:${pnlColor}"></div>
+        </div>
+        <div class="flex justify-between" style="font-size:0.65rem;color:#475569">
+          <span>SL -${slPct}%</span>
+          <span>${pnlPct>=0?'+':''}${pnlPct.toFixed(2)}% of ${tpPct}% target</span>
+          <span>TP +${tpPct}%</span>
+        </div>
+        ${signals ? `<div class="mt-1" style="font-size:0.65rem;color:#475569">MTF: ${signals}</div>` : ''}
+      </div>`;
     }
 
+    // ── COMPACT card for flat pairs ──
     return `
     <div class="flex items-center justify-between bg-slate-900 rounded-lg px-3 py-2">
       <div>
         <span class="font-semibold text-sm text-white">${asset.replace('/USDT','')}</span>
         <span class="text-slate-400 text-xs ml-1">USDT</span>
         <span class="${posClass} text-xs font-bold ml-2">${posLabel}</span>
-        ${pnlStr}
-        ${posDetail}
       </div>
       <div class="text-right text-xs text-slate-400">
         <div>$${parseFloat(hb.price || 0).toFixed(4)}</div>
