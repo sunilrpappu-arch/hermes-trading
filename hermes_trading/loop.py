@@ -37,7 +37,7 @@ from hermes_trading.indicators import (
     classify_pair_regime,
 )
 from hermes_trading.adapters.candles import closes as get_closes, highs as get_highs, lows as get_lows
-from hermes_trading.notify import send_trade_email
+from hermes_trading.notify import send_trade_email, send_reflection_notification
 
 STATE_DIR      = Path(os.getenv("STATE_DIR", Path(__file__).parent.parent / "state"))
 TRADES_FILE    = STATE_DIR / "trades.jsonl"
@@ -254,6 +254,76 @@ DEFAULT_STRATEGY = {
     "stop_loss_pct":    1.8,
     "position_size_r":  0.05,
 }
+
+
+def _run_reflection(trades: list[dict], stats: dict):
+    """
+    Reflection cycle — runs every N closed trades.
+    Analyses recent performance and sends a summary via Telegram.
+    In future versions this will auto-update strategy parameters.
+    """
+    n = len(trades)
+    recent = trades[-5:]  # last 5 trades
+
+    wins_recent   = sum(1 for t in recent if (t.get("pnl_pct") or 0) > 0)
+    losses_recent = len(recent) - wins_recent
+    pnl_recent    = sum((t.get("pnl_usdt") or 0) for t in recent)
+
+    # Breakdown by close reason
+    reasons = {}
+    for t in recent:
+        r = t.get("close_reason", "?")
+        reasons[r] = reasons.get(r, 0) + 1
+
+    # Best/worst of recent
+    best  = max(recent, key=lambda t: t.get("pnl_pct") or 0)
+    worst = min(recent, key=lambda t: t.get("pnl_pct") or 0)
+
+    # Regime breakdown
+    regimes = {}
+    for t in recent:
+        reg = t.get("regime_at_entry", "?")
+        regimes[reg] = regimes.get(reg, 0) + 1
+
+    reasons_str = "  ".join(f"{r}:{c}" for r, c in reasons.items())
+    regimes_str = "  ".join(f"{r}:{c}" for r, c in regimes.items())
+    best_pct    = (best.get("pnl_pct") or 0) * 100
+    worst_pct   = (worst.get("pnl_pct") or 0) * 100
+
+    summary = (
+        f"🔄 <b>Reflection #{n // 5}</b> — last {len(recent)} trades\n\n"
+        f"W/L: {wins_recent}W / {losses_recent}L   "
+        f"PnL: {'+' if pnl_recent >= 0 else ''}${pnl_recent:.4f}\n"
+        f"Best:  {best.get('asset','?')} {best_pct:+.2f}%\n"
+        f"Worst: {worst.get('asset','?')} {worst_pct:+.2f}%\n"
+        f"Reasons: {reasons_str}\n"
+        f"Regimes: {regimes_str}\n\n"
+        f"<b>All-time</b>: {stats['total_trades']} trades  "
+        f"{stats['wins']}W/{stats['losses']}L  "
+        f"WR {stats['win_rate']:.0f}%  "
+        f"PnL ${stats['total_pnl_usdt']:+.4f}"
+    )
+
+    print(f"[reflection] {summary}", flush=True)
+    send_reflection_notification(summary)
+
+    # Log to hypotheses file for future self-improvement
+    try:
+        hyp = {
+            "timestamp":    time.time(),
+            "cycle":        n // 5,
+            "trades_n":     n,
+            "recent_wr":    wins_recent / len(recent) if recent else 0,
+            "recent_pnl":   pnl_recent,
+            "reasons":      reasons,
+            "regimes":      regimes,
+            "stats":        stats,
+        }
+        hyp_file = STATE_DIR / "hypotheses.jsonl"
+        with open(hyp_file, "a") as f:
+            f.write(json.dumps(hyp) + "\n")
+    except Exception as e:
+        print(f"[reflection] failed to log hypothesis: {e}", flush=True)
 
 
 def load_strategy() -> dict:
@@ -575,13 +645,19 @@ class TradingLoop:
                     pass
                 wins   = sum(1 for t in all_trades if t.get("pnl_pct", 0) > 0)
                 losses = len(all_trades) - wins
-                send_trade_email(trade, {
+                stats  = {
                     "total_trades":   len(all_trades),
                     "wins":           wins,
                     "losses":         losses,
                     "win_rate":       round(wins / len(all_trades) * 100, 1) if all_trades else 0,
-                    "total_pnl_usdt": round(sum(t.get("pnl_usdt", 0) for t in all_trades), 4),
-                })
+                    "total_pnl_usdt": round(sum(t.get("pnl_usdt", 0) or 0 for t in all_trades), 4),
+                }
+                send_trade_email(trade, stats)
+
+                # Reflection cycle — every 5 closed trades
+                reflection_every = 5
+                if len(all_trades) % reflection_every == 0:
+                    _run_reflection(all_trades, stats)
 
                 print(f"  ← CLOSE {pos_direction.upper()} {self.asset} @ {current_price:.4f} "
                       f"pnl={pnl_pct:+.3%} (lev={pos_leverage}x) [{close_reason}] "
