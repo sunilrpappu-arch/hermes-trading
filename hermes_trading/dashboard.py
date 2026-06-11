@@ -45,14 +45,32 @@ def _read_trades() -> list[dict]:
     return trades
 
 
+_HEARTBEAT_MAX_AGE = 45 * 60   # 45 minutes — pairs not updated in this window are considered retired
+
+
 def _read_heartbeats() -> dict[str, dict]:
-    """Return {asset: heartbeat_dict} for all active pairs."""
-    hbs = {}
+    """Return {asset: heartbeat_dict} for all recently-active pairs (updated within 45 min)."""
+    hbs  = {}
+    stale = []
+    now  = time.time()
     for hf in STATE_DIR.glob("heartbeat_*.json"):
         try:
-            data = json.loads(hf.read_text())
+            data  = json.loads(hf.read_text())
             asset = data.get("asset") or hf.stem.replace("heartbeat_", "").replace("_", "/", 1)
+            ts_str = data.get("timestamp")
+            if ts_str:
+                ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
+                age = now - ts
+                if age > _HEARTBEAT_MAX_AGE:
+                    stale.append(hf)
+                    continue
             hbs[asset] = data
+        except Exception:
+            pass
+    # Clean up stale heartbeat files (pairs that were retired long ago)
+    for hf in stale:
+        try:
+            hf.unlink()
         except Exception:
             pass
     return hbs

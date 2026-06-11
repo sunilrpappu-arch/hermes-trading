@@ -143,6 +143,13 @@ async def run_all(universe: list[str], total_capital: float, force_pairs: list[s
                 print(f"[coordinator] retiring {pair}", flush=True)
                 if tasks.get(pair) and not tasks[pair].done():
                     tasks[pair].cancel()
+                # Clean up heartbeat file so it doesn't linger on dashboard
+                safe = pair.replace("/", "_")
+                hb_file = STATE_DIR / f"heartbeat_{safe}.json"
+                try:
+                    hb_file.unlink(missing_ok=True)
+                except Exception:
+                    pass
                 del loops[pair]
                 del queues[pair]
                 del tasks[pair]
