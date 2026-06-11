@@ -174,9 +174,12 @@ async def api_state():
             is_sideways = hb.get("is_sideways", False)
             break
 
+    total_capital = float(os.getenv("TOTAL_CAPITAL_USDT", "1000"))
+
     return JSONResponse({
-        "generated_at":    datetime.now(timezone.utc).isoformat(),
-        "strategy":        strategy,
+        "generated_at":       datetime.now(timezone.utc).isoformat(),
+        "total_capital_usdt": total_capital,
+        "strategy":           strategy,
         "strategy_version": strategy.get("version", "?"),
         "regime":          regime,
         "is_sideways":     is_sideways,
@@ -358,7 +361,12 @@ _HTML = r"""<!DOCTYPE html>
 </div>
 
 <!-- Summary cards -->
-<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+<div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+  <div class="card">
+    <p class="text-slate-400 text-xs mb-1">TOTAL CAPITAL</p>
+    <p id="stat-capital" class="text-2xl font-bold text-white">$0</p>
+    <p id="stat-capital-deployed" class="text-slate-500 text-xs mt-1">$0 deployed</p>
+  </div>
   <div class="card">
     <p class="text-slate-400 text-xs mb-1">TOTAL PnL</p>
     <p id="stat-pnl" class="text-2xl font-bold">$0.00</p>
@@ -741,6 +749,14 @@ async function refresh() {
 
     const ver = data.strategy?.version || data.strategy_version;
     document.getElementById('strategy-ver').textContent = ver ? 'v' + ver : '';
+
+    // Total capital + deployed
+    const totalCap = data.drawdown?.total_capital || data.total_capital_usdt || 1000;
+    const deployed = Object.values(data.heartbeats || {})
+      .filter(hb => hb.open_position)
+      .reduce((s, hb) => s + parseFloat(hb.open_position.usdt_deployed || 0), 0);
+    document.getElementById('stat-capital').textContent = '$' + parseFloat(totalCap).toLocaleString(undefined, {minimumFractionDigits:0, maximumFractionDigits:0});
+    document.getElementById('stat-capital-deployed').textContent = '$' + deployed.toFixed(2) + ' deployed';
 
     // Stats
     const p = data.portfolio;
