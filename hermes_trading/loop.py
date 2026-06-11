@@ -95,12 +95,14 @@ class PortfolioDrawdown:
     Tracks realised PnL across all pairs.
     Halts new entries when portfolio drawdown exceeds the cap.
     """
-    _peak_usdt:    float = 0.0
-    _current_usdt: float = 0.0
-    _halted:       bool  = False
+    _peak_usdt:      float = 0.0
+    _current_usdt:   float = 0.0
+    _total_capital:  float = 1000.0   # updated on every record_trade call
+    _halted:         bool  = False
 
     @classmethod
     def record_trade(cls, pnl_usdt: float, total_capital: float):
+        cls._total_capital = total_capital
         cls._current_usdt += pnl_usdt
         if cls._current_usdt > cls._peak_usdt:
             cls._peak_usdt = cls._current_usdt
@@ -108,10 +110,15 @@ class PortfolioDrawdown:
 
     @classmethod
     def drawdown(cls) -> float:
-        """Current drawdown as fraction of total capital (0.05 = 5%)."""
-        if cls._peak_usdt <= 0:
-            return abs(min(cls._current_usdt, 0)) / max(cls._peak_usdt, 1)
-        return max(0.0, (cls._peak_usdt - cls._current_usdt) / cls._peak_usdt)
+        """Current drawdown as fraction of total capital (0.05 = 5%).
+        Uses total_capital as the base so early losses aren't inflated."""
+        if cls._peak_usdt > 0:
+            # Normal case: peak exists, measure from peak
+            dd_from_peak = (cls._peak_usdt - cls._current_usdt) / cls._peak_usdt
+        else:
+            # No profitable trades yet — measure loss directly against total capital
+            dd_from_peak = abs(min(cls._current_usdt, 0)) / max(cls._total_capital, 1)
+        return max(0.0, dd_from_peak)
 
     @classmethod
     def is_halted(cls, cap: float) -> bool:
