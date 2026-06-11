@@ -51,6 +51,19 @@ def bootstrap_state():
         if not f.exists():
             f.touch()
 
+    # Reset drawdown.json if it contains an obviously wrong value (>50% DD)
+    # This can happen from the early bug where we divided by 1 instead of total capital
+    import json as _json
+    dd_file = STATE_DIR / "drawdown.json"
+    if dd_file.exists():
+        try:
+            dd = _json.loads(dd_file.read_text())
+            if dd.get("drawdown_pct", 0) > 50:
+                dd_file.unlink()
+                print(f"[bootstrap] reset corrupt drawdown.json (was {dd['drawdown_pct']}%)", flush=True)
+        except Exception:
+            pass
+
 
 def load_goal() -> dict:
     goal_file = STATE_DIR / "goal.yaml"
