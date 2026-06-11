@@ -524,6 +524,8 @@ function tvUrl(asset) {
   return `https://www.tradingview.com/chart/?symbol=BINANCE:${sym}USDTPERP`;
 }
 
+let _savedControls = {};   // latest controls from /api/controls — used to keep UI in sync
+
 function renderPairs(heartbeats) {
   const el = document.getElementById('pairs-grid');
   const entries = Object.entries(heartbeats);
@@ -559,7 +561,9 @@ function renderPairs(heartbeats) {
       const barPct   = Math.min(Math.abs(pnlPct) / tpPct * 100, 100).toFixed(1);
       const signals    = (pos.htf_signals || []).join(', ') || null;
       const regime     = pos.pair_regime || '—';
-      const pos_leverage = parseFloat(pos.leverage || 1.0);
+      // Use saved override if present, else fall back to position's entry leverage
+      const lev_override = _savedControls.leverage_overrides && _savedControls.leverage_overrides[asset];
+      const pos_leverage = parseFloat(lev_override || pos.leverage || 1.0);
       const borderCol  = pos.direction === 'long' ? '#065f46' : '#7f1d1d';
 
       return `
@@ -764,6 +768,7 @@ async function refresh() {
     try {
       const ctrlRes = await fetch('/api/controls');
       const ctrl = await ctrlRes.json();
+      _savedControls = ctrl;
       updateControlsBadge(ctrl);
     } catch(e) {}
 
@@ -880,10 +885,16 @@ async function doForceExit(asset) {
 async function doSetLeverage(asset, leverage) {
   if (!leverage) {
     await ctrlPost({action: 'clear_leverage', asset});
+    if (!_savedControls.leverage_overrides) _savedControls.leverage_overrides = {};
+    delete _savedControls.leverage_overrides[asset];
     showToast(`${asset} leverage reset to regime default`);
   } else {
     const res = await ctrlPost({action: 'set_leverage', asset, leverage: parseFloat(leverage)});
-    if (res) showToast(`${asset} leverage override → ${leverage}x`);
+    if (res) {
+      if (!_savedControls.leverage_overrides) _savedControls.leverage_overrides = {};
+      _savedControls.leverage_overrides[asset] = parseFloat(leverage);
+      showToast(`${asset} leverage override → ${leverage}x (saved)`);
+    }
   }
 }
 
