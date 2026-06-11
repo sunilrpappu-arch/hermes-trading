@@ -156,10 +156,11 @@ async def api_state():
             break
 
     return JSONResponse({
-        "generated_at":  datetime.now(timezone.utc).isoformat(),
-        "strategy":      strategy,
-        "regime":        regime,
-        "is_sideways":   is_sideways,
+        "generated_at":    datetime.now(timezone.utc).isoformat(),
+        "strategy":        strategy,
+        "strategy_version": strategy.get("version", "?"),
+        "regime":          regime,
+        "is_sideways":     is_sideways,
         "portfolio":     stats,
         "drawdown":      drawdown,
         "cum_pnl":       cum_pnl,
@@ -472,7 +473,7 @@ async function refresh() {
     document.getElementById('regime-badge').textContent = regimeLabel(regime, data.is_sideways);
     document.getElementById('regime-badge').className = 'badge ' + regimeClass(regime);
 
-    const ver = data.strategy?.version;
+    const ver = data.strategy?.version || data.strategy_version;
     document.getElementById('strategy-ver').textContent = ver ? 'v' + ver : '';
 
     // Stats
