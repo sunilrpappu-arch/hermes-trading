@@ -1,30 +1,28 @@
-# v09 — Regime-separated entry strategy
+# v10 — Regime-separated strategy with dynamic leverage + manual controls
 # Each pair is classified independently (bull/bear/sideways) using its own 4H ADX + 50MA.
 # Different entry rules apply per regime. MTF is informational only (no hard gate).
 
 # Bull regime: price above 50MA on 4H, ADX >= 20
-# Long bias — buy RSI dips. Short only on confirmed liquidity grabs.
 bull:
-  long_threshold:   35      # RSI < 35 in uptrend → buy the dip
-  short_on_lq_only: true    # shorts only when a liquidity grab is confirmed
+  long_threshold:   35
+  short_on_lq_only: true
 
 # Bear regime: price below 50MA on 4H, ADX >= 20
-# Short bias — sell RSI bounces. Long only on confirmed liquidity grabs.
 bear:
-  short_threshold:  60      # RSI > 60 in downtrend → sell the bounce
-  long_on_lq_only:  true    # longs only when a liquidity grab is confirmed
+  short_threshold:  60
+  long_on_lq_only:  true
 
 # Sideways regime: ADX < 20 on 4H — mean-reversion at range extremes
 sideways:
   adx_threshold:   20.0
-  range_entry_pct: 0.20     # enter when price is in bottom/top 20% of PDH-PDL range
+  range_entry_pct: 0.20
   or_bars:         4
   swing_lookback:  20
 
 # MTF signals are logged on every entry but no longer block trades
 mtf:
   enabled:         true
-  require_signals: 0        # 0 = informational only
+  require_signals: 0
 
 trend_filter:
   enabled:   true
@@ -40,8 +38,18 @@ drawdown:
   per_pair_cap:  0.10
   portfolio_cap: 0.08
 
+# Dynamic leverage per macro regime
+# Higher in calm/ranging (more predictable), lower in volatile/extreme (capital preservation)
+leverage:
+  sideways:     2.0   # ranging market → 2x (mean-reversion high probability)
+  calm:         2.0   # calm trend     → 2x
+  normal:       1.5   # normal market  → 1.5x
+  volatile:     1.0   # high vol       → no leverage
+  extreme:      1.0   # extreme vol    → no leverage, capital preservation
+  max_leverage: 3.0   # hard cap — dashboard cannot exceed this
+
 take_profit_pct: 3.0
 stop_loss_pct:   1.8
 position_size_r: 0.05
 
-version: '09'
+version: '10'

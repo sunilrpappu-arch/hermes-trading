@@ -25,6 +25,7 @@ REGIME_PARAMS: dict[str, dict] = {
         "position_size_r":  0.05,
         "stop_loss_pct":    1.8,
         "take_profit_pct":  3.0,
+        "leverage":         2.0,   # calm trend → 2x amplification
         "label":           "🟢 calm",
     },
     "normal": {
@@ -33,6 +34,7 @@ REGIME_PARAMS: dict[str, dict] = {
         "position_size_r":  0.04,
         "stop_loss_pct":    1.5,
         "take_profit_pct":  3.0,
+        "leverage":         1.5,   # moderate trend → 1.5x
         "label":           "🟡 normal",
     },
     "volatile": {
@@ -41,6 +43,7 @@ REGIME_PARAMS: dict[str, dict] = {
         "position_size_r":  0.03,
         "stop_loss_pct":    1.2,
         "take_profit_pct":  2.5,
+        "leverage":         1.0,   # high vol → no leverage
         "label":           "🟠 volatile",
     },
     "extreme": {
@@ -49,6 +52,7 @@ REGIME_PARAMS: dict[str, dict] = {
         "position_size_r":  0.02,
         "stop_loss_pct":    0.8,
         "take_profit_pct":  2.0,
+        "leverage":         1.0,   # extreme → no leverage, capital preservation
         "label":           "🔴 extreme",
     },
     # Sideways / ranging: ADX < 20 regardless of absolute vol level
@@ -59,6 +63,7 @@ REGIME_PARAMS: dict[str, dict] = {
         "position_size_r":  0.04,
         "stop_loss_pct":    1.5,
         "take_profit_pct":  2.5,
+        "leverage":         2.0,   # ranging market → 2x (mean-reversion high probability)
         "label":            "↔️  sideways",
     },
 }

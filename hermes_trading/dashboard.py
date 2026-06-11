@@ -16,11 +16,12 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
-STATE_DIR = Path(os.getenv("STATE_DIR", Path(__file__).parent.parent / "state"))
-PORT      = int(os.getenv("PORT", "8080"))
+STATE_DIR     = Path(os.getenv("STATE_DIR", Path(__file__).parent.parent / "state"))
+CONTROLS_FILE = STATE_DIR / "controls.json"
+PORT          = int(os.getenv("PORT", "8080"))
 
 app = FastAPI(title="Hermes Trading Dashboard", docs_url=None, redoc_url=None)
 
@@ -179,6 +180,107 @@ async def api_pairs():
     return JSONResponse({"pairs": _read_heartbeats()})
 
 
+def _read_controls() -> dict:
+    try:
+        if CONTROLS_FILE.exists():
+            return json.loads(CONTROLS_FILE.read_text())
+    except Exception:
+        pass
+    return {"all_stop": False, "manual_exits": [], "pending_entries": [], "leverage_overrides": {}}
+
+
+def _write_controls(ctrl: dict):
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    CONTROLS_FILE.write_text(json.dumps(ctrl, indent=2))
+
+
+@app.get("/api/controls")
+async def api_controls():
+    return JSONResponse(_read_controls())
+
+
+@app.post("/api/control")
+async def api_control(request: Request):
+    """
+    Manual override endpoint — called from dashboard buttons.
+
+    Actions:
+      all_stop          → close all positions, halt new entries
+      resume            → clear all_stop flag, resume normal trading
+      exit              → force-close a specific pair's open position
+      enter             → queue a manual entry for a specific pair
+      set_leverage      → override leverage for a specific pair (persists until changed)
+      clear_leverage    → remove leverage override for a pair (reverts to regime default)
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid JSON"}, status_code=400)
+
+    action = body.get("action")
+    ctrl   = _read_controls()
+
+    if action == "all_stop":
+        ctrl["all_stop"] = True
+        _write_controls(ctrl)
+        return JSONResponse({"ok": True, "all_stop": True})
+
+    elif action == "resume":
+        ctrl["all_stop"] = False
+        _write_controls(ctrl)
+        return JSONResponse({"ok": True, "all_stop": False})
+
+    elif action == "exit":
+        asset = body.get("asset")
+        if not asset:
+            return JSONResponse({"ok": False, "error": "asset required"}, status_code=400)
+        exits = ctrl.get("manual_exits", [])
+        if asset not in exits:
+            exits.append(asset)
+        ctrl["manual_exits"] = exits
+        _write_controls(ctrl)
+        return JSONResponse({"ok": True, "queued_exit": asset})
+
+    elif action == "enter":
+        asset     = body.get("asset")
+        direction = body.get("direction", "long")
+        leverage  = body.get("leverage")
+        if not asset:
+            return JSONResponse({"ok": False, "error": "asset required"}, status_code=400)
+        entries = [e for e in ctrl.get("pending_entries", []) if e.get("asset") != asset]
+        entry = {"asset": asset, "direction": direction}
+        if leverage:
+            entry["leverage"] = float(leverage)
+        entries.append(entry)
+        ctrl["pending_entries"] = entries
+        _write_controls(ctrl)
+        return JSONResponse({"ok": True, "queued_entry": entry})
+
+    elif action == "set_leverage":
+        asset    = body.get("asset")
+        leverage = body.get("leverage")
+        if not asset or leverage is None:
+            return JSONResponse({"ok": False, "error": "asset and leverage required"}, status_code=400)
+        overrides = ctrl.get("leverage_overrides", {})
+        overrides[asset] = float(leverage)
+        ctrl["leverage_overrides"] = overrides
+        _write_controls(ctrl)
+        return JSONResponse({"ok": True, "leverage_override": {asset: float(leverage)}})
+
+    elif action == "clear_leverage":
+        asset = body.get("asset")
+        if not asset:
+            return JSONResponse({"ok": False, "error": "asset required"}, status_code=400)
+        overrides = ctrl.get("leverage_overrides", {})
+        overrides.pop(asset, None)
+        ctrl["leverage_overrides"] = overrides
+        _write_controls(ctrl)
+        return JSONResponse({"ok": True, "cleared_leverage": asset})
+
+    else:
+        return JSONResponse({"ok": False, "error": f"unknown action: {action}"}, status_code=400)
+
+
 # ---------------------------------------------------------------------------
 # HTML dashboard
 # ---------------------------------------------------------------------------
@@ -254,6 +356,58 @@ _HTML = r"""<!DOCTYPE html>
   <div class="card">
     <p class="text-slate-400 text-xs mb-1">PORTFOLIO DD</p>
     <p id="stat-dd" class="text-2xl font-bold">0%</p>
+  </div>
+</div>
+
+<!-- Controls Panel -->
+<div id="controls-panel" class="card mb-6">
+  <div class="flex items-center justify-between mb-4">
+    <p class="text-slate-400 text-xs font-semibold">MANUAL CONTROLS</p>
+    <span id="all-stop-badge" class="badge bg-slate-700 text-slate-400">● ACTIVE</span>
+  </div>
+  <div class="flex flex-wrap gap-3 mb-4">
+    <button onclick="doAllStop()"
+      class="flex items-center gap-2 px-4 py-2 rounded-lg font-semibold text-sm bg-red-950 hover:bg-red-900 text-red-300 border border-red-800 transition-colors">
+      ⛔ ALL STOP
+    </button>
+    <button onclick="doResume()"
+      class="flex items-center gap-2 px-4 py-2 rounded-lg font-semibold text-sm bg-emerald-950 hover:bg-emerald-900 text-emerald-300 border border-emerald-800 transition-colors">
+      ▶ RESUME TRADING
+    </button>
+  </div>
+
+  <!-- Manual entry form -->
+  <div class="border-t border-slate-700 pt-4">
+    <p class="text-slate-500 text-xs mb-3">MANUAL ENTRY — force open a position on next tick</p>
+    <div class="flex flex-wrap gap-2 items-end">
+      <div>
+        <label class="text-slate-500 text-xs block mb-1">Pair</label>
+        <select id="manual-asset" class="bg-slate-800 border border-slate-700 text-slate-200 text-sm rounded px-2 py-1.5">
+          <option value="">Select pair…</option>
+        </select>
+      </div>
+      <div>
+        <label class="text-slate-500 text-xs block mb-1">Direction</label>
+        <select id="manual-dir" class="bg-slate-800 border border-slate-700 text-slate-200 text-sm rounded px-2 py-1.5">
+          <option value="long">LONG</option>
+          <option value="short">SHORT</option>
+        </select>
+      </div>
+      <div>
+        <label class="text-slate-500 text-xs block mb-1">Leverage</label>
+        <select id="manual-lev" class="bg-slate-800 border border-slate-700 text-slate-200 text-sm rounded px-2 py-1.5">
+          <option value="">Regime default</option>
+          <option value="1">1x</option>
+          <option value="1.5">1.5x</option>
+          <option value="2">2x</option>
+          <option value="3">3x</option>
+        </select>
+      </div>
+      <button onclick="doManualEntry()"
+        class="px-4 py-1.5 rounded-lg text-sm font-semibold bg-indigo-900 hover:bg-indigo-800 text-indigo-200 border border-indigo-700 transition-colors">
+        Queue Entry →
+      </button>
+    </div>
   </div>
 </div>
 
@@ -385,9 +539,10 @@ function renderPairs(heartbeats) {
       const tpPrice  = pos.direction === 'long' ? entry*(1+tpPct/100) : entry*(1-tpPct/100);
       const pnlColor = pnlPct >= 0 ? '#34d399' : '#f87171';
       const barPct   = Math.min(Math.abs(pnlPct) / tpPct * 100, 100).toFixed(1);
-      const signals  = (pos.htf_signals || []).join(', ') || null;
-      const regime   = pos.pair_regime || '—';
-      const borderCol = pos.direction === 'long' ? '#065f46' : '#7f1d1d';
+      const signals    = (pos.htf_signals || []).join(', ') || null;
+      const regime     = pos.pair_regime || '—';
+      const pos_leverage = parseFloat(pos.leverage || 1.0);
+      const borderCol  = pos.direction === 'long' ? '#065f46' : '#7f1d1d';
 
       return `
       <div class="rounded-lg px-3 py-3" style="background:#0f1a2e;border:1px solid ${borderCol};cursor:pointer"
@@ -422,7 +577,27 @@ function renderPairs(heartbeats) {
           <span data-live-asset="${asset}" data-field="barlabel">${pnlPct>=0?'+':''}${pnlPct.toFixed(2)}% of ${tpPct}% target</span>
           <span>TP +${tpPct}%</span>
         </div>
-        ${signals ? `<div class="mt-1" style="font-size:0.65rem;color:#475569">MTF: ${signals}</div>` : ''}
+        ${signals ? `<div class="mt-1 mb-2" style="font-size:0.65rem;color:#475569">MTF: ${signals}</div>` : ''}
+
+        <!-- Per-position controls -->
+        <div class="flex gap-2 mt-2 pt-2 border-t border-slate-800 flex-wrap">
+          <button onclick="event.stopPropagation();doForceExit('${asset}')"
+            class="px-3 py-1 text-xs font-semibold rounded bg-red-950 hover:bg-red-900 text-red-300 border border-red-800 transition-colors">
+            ✕ Force Exit
+          </button>
+          <div class="flex items-center gap-1">
+            <span class="text-slate-500 text-xs">Leverage:</span>
+            <select onchange="event.stopPropagation();doSetLeverage('${asset}', this.value)"
+              class="bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded px-1 py-0.5">
+              <option value="">default</option>
+              <option value="1" ${pos_leverage==1?'selected':''}>1x</option>
+              <option value="1.5" ${pos_leverage==1.5?'selected':''}>1.5x</option>
+              <option value="2" ${pos_leverage==2?'selected':''}>2x</option>
+              <option value="3" ${pos_leverage==3?'selected':''}>3x</option>
+            </select>
+            <span class="text-slate-400 text-xs">(now ${pos_leverage}x · notional $${(parseFloat(pos.notional_usdt||deployed)).toFixed(0)})</span>
+          </div>
+        </div>
       </div>`;
     }
 
@@ -567,9 +742,29 @@ async function refresh() {
     if (data.cum_pnl?.length) renderPnlChart(data.cum_pnl);
     else renderPnlChart([]);
 
+    // Fetch controls state and update badge
+    try {
+      const ctrlRes = await fetch('/api/controls');
+      const ctrl = await ctrlRes.json();
+      updateControlsBadge(ctrl);
+    } catch(e) {}
+
     // Pairs + populate open positions for live price polling
     const heartbeats = data.heartbeats || {};
     renderPairs(heartbeats);
+
+    // Populate manual-entry asset dropdown
+    const sel = document.getElementById('manual-asset');
+    if (sel) {
+      const existing = Array.from(sel.options).map(o => o.value);
+      Object.keys(heartbeats).forEach(asset => {
+        if (!existing.includes(asset)) {
+          const opt = document.createElement('option');
+          opt.value = asset; opt.textContent = asset;
+          sel.appendChild(opt);
+        }
+      });
+    }
     _openPositions = {};
     for (const [asset, hb] of Object.entries(heartbeats)) {
       if (hb.open_position && hb.open_position.entry_price) {
@@ -630,6 +825,94 @@ async function refreshLivePrices() {
       });
     } catch(e) { /* silent */ }
   }));
+}
+
+// ── Control helpers ──────────────────────────────────────────────────────────
+
+async function ctrlPost(body) {
+  try {
+    const r = await fetch('/api/control', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    });
+    const data = await r.json();
+    if (!data.ok) { alert('Error: ' + (data.error || JSON.stringify(data))); return null; }
+    return data;
+  } catch(e) { alert('Request failed: ' + e); return null; }
+}
+
+async function doAllStop() {
+  if (!confirm('⛔ ALL STOP — close all open positions and halt new entries?')) return;
+  const res = await ctrlPost({action: 'all_stop'});
+  if (res) { showToast('⛔ ALL STOP activated — positions will close on next tick'); refresh(); }
+}
+
+async function doResume() {
+  const res = await ctrlPost({action: 'resume'});
+  if (res) { showToast('▶ Trading resumed'); refresh(); }
+}
+
+async function doForceExit(asset) {
+  if (!confirm(`Force-exit ${asset}?`)) return;
+  const res = await ctrlPost({action: 'exit', asset});
+  if (res) { showToast(`✕ Exit queued for ${asset} — will close on next tick`); }
+}
+
+async function doSetLeverage(asset, leverage) {
+  if (!leverage) {
+    await ctrlPost({action: 'clear_leverage', asset});
+    showToast(`${asset} leverage reset to regime default`);
+  } else {
+    const res = await ctrlPost({action: 'set_leverage', asset, leverage: parseFloat(leverage)});
+    if (res) showToast(`${asset} leverage override → ${leverage}x`);
+  }
+}
+
+async function doManualEntry() {
+  const asset     = document.getElementById('manual-asset').value;
+  const direction = document.getElementById('manual-dir').value;
+  const leverage  = document.getElementById('manual-lev').value;
+  if (!asset) { alert('Select a pair first'); return; }
+  if (!confirm(`Queue manual ${direction.toUpperCase()} entry for ${asset}${leverage ? ' @ '+leverage+'x' : ''}?`)) return;
+  const body = {action: 'enter', asset, direction};
+  if (leverage) body.leverage = parseFloat(leverage);
+  const res = await ctrlPost(body);
+  if (res) showToast(`→ ${direction.toUpperCase()} entry queued for ${asset} — fires on next tick`);
+}
+
+function showToast(msg) {
+  let t = document.getElementById('toast');
+  if (!t) {
+    t = document.createElement('div');
+    t.id = 'toast';
+    t.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);' +
+      'background:#1e293b;border:1px solid #334155;color:#e2e8f0;padding:10px 20px;' +
+      'border-radius:8px;font-size:0.875rem;z-index:9999;transition:opacity .3s;';
+    document.body.appendChild(t);
+  }
+  t.textContent = msg;
+  t.style.opacity = '1';
+  clearTimeout(t._to);
+  t._to = setTimeout(() => { t.style.opacity = '0'; }, 3500);
+}
+
+function updateControlsBadge(ctrl) {
+  const badge = document.getElementById('all-stop-badge');
+  if (!badge) return;
+  if (ctrl && ctrl.all_stop) {
+    badge.textContent = '⛔ ALL STOP';
+    badge.className = 'badge bg-red-950 text-red-300 border border-red-700';
+    document.getElementById('controls-panel').style.borderColor = '#7f1d1d';
+  } else {
+    badge.textContent = '● ACTIVE';
+    badge.className = 'badge bg-slate-700 text-slate-400';
+    document.getElementById('controls-panel').style.borderColor = '';
+  }
+  // populate pending entries/exits info if any
+  const exits = (ctrl && ctrl.manual_exits) || [];
+  const pendings = (ctrl && ctrl.pending_entries) || [];
+  // could add a small status line here if needed
 }
 
 // Initial load + 30s full refresh + 5s live price refresh
