@@ -135,6 +135,52 @@ class PortfolioDrawdown:
             pass
 
 
+# ---------------------------------------------------------------------------
+# Daily loss limit (shared across all pairs in this process)
+# ---------------------------------------------------------------------------
+
+class DailyLossGuard:
+    """
+    Tracks today's realised PnL in USDT.
+    Halts new entries for the rest of the UTC day if daily loss exceeds the cap.
+    Resets automatically at UTC midnight.
+    """
+    _date:       str   = ""    # "YYYY-MM-DD" of the current trading day
+    _daily_pnl:  float = 0.0   # cumulative PnL since midnight UTC
+
+    @classmethod
+    def _today(cls) -> str:
+        return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    @classmethod
+    def record(cls, pnl_usdt: float):
+        today = cls._today()
+        if cls._date != today:
+            cls._date      = today
+            cls._daily_pnl = 0.0   # reset at midnight
+        cls._daily_pnl += pnl_usdt
+
+    @classmethod
+    def is_halted(cls, cap_pct: float, total_capital: float) -> bool:
+        today = cls._today()
+        if cls._date != today:
+            cls._date      = today
+            cls._daily_pnl = 0.0
+        cap_usdt = total_capital * cap_pct
+        halted   = cls._daily_pnl <= -cap_usdt
+        if halted:
+            print(
+                f"[DAILY LOSS CAP] daily_pnl=${cls._daily_pnl:.2f} ≤ -${cap_usdt:.2f} "
+                f"({cap_pct:.0%} of capital) — no new entries until midnight UTC",
+                flush=True,
+            )
+        return halted
+
+    @classmethod
+    def summary(cls) -> dict:
+        return {"date": cls._date, "daily_pnl_usdt": round(cls._daily_pnl, 4)}
+
+
 async def fetch_with_retry(fn, *args, **kwargs):
     for attempt in range(RETRY_ATTEMPTS):
         try:
@@ -182,6 +228,12 @@ DEFAULT_STRATEGY = {
         "per_pair_cap":  0.10,
         "portfolio_cap": 0.08,
     },
+    "cooldown": {
+        "after_stop_loss_minutes": 30,   # wait 30 min before re-entering a pair after a stop-loss
+    },
+    "daily_loss": {
+        "max_loss_pct": 0.03,            # halt all new entries if down >3% of total capital on the day
+    },
     "leverage": {
         # Default leverage per macro regime (can be overridden per-pair via dashboard)
         "sideways": 2.0,
@@ -219,16 +271,23 @@ class TradingLoop:
         self._realised_pnl_usdt: float = 0.0
         self._pair_peak_usdt:    float = 0.0
 
+        # Post-loss cooldown: timestamp of last stop-loss exit (0 = never)
+        self._last_stop_loss_ts: float = 0.0
+
     # ------------------------------------------------------------------
     # Drawdown helpers
     # ------------------------------------------------------------------
 
-    def _record_pnl(self, pnl_pct: float, usdt_deployed: float):
+    def _record_pnl(self, pnl_pct: float, usdt_deployed: float, close_reason: str = ""):
         pnl_usdt = pnl_pct * usdt_deployed
         self._realised_pnl_usdt += pnl_usdt
         if self._realised_pnl_usdt > self._pair_peak_usdt:
             self._pair_peak_usdt = self._realised_pnl_usdt
         PortfolioDrawdown.record_trade(pnl_usdt, self.capital_usdt)
+        DailyLossGuard.record(pnl_usdt)
+        # Start cooldown timer on stop-loss exits
+        if close_reason == "stop_loss":
+            self._last_stop_loss_ts = time.time()
 
     def _pair_drawdown(self) -> float:
         if self._pair_peak_usdt <= 0:
@@ -350,6 +409,8 @@ class TradingLoop:
         lq_cfg          = strategy.get("liquidity_grab", {})
         dd_cfg          = strategy.get("drawdown", {})
         lev_cfg         = strategy.get("leverage", {})
+        cooldown_cfg    = strategy.get("cooldown", {})
+        daily_loss_cfg  = strategy.get("daily_loss", {})
 
         trend_enabled      = trend_cfg.get("enabled", True)
         ma_period          = trend_cfg.get("ma_period", 50)
@@ -358,6 +419,8 @@ class TradingLoop:
         pair_dd_cap        = dd_cfg.get("per_pair_cap", 0.10)
         portfolio_dd_cap   = dd_cfg.get("portfolio_cap", 0.08)
         max_leverage       = float(lev_cfg.get("max_leverage", 3.0))
+        cooldown_minutes   = float(cooldown_cfg.get("after_stop_loss_minutes", 30))
+        daily_loss_cap     = float(daily_loss_cfg.get("max_loss_pct", 0.03))
 
         sw_cfg            = strategy.get("sideways", {})
         sw_entry_pct      = sw_cfg.get("range_entry_pct", 0.20)
@@ -472,7 +535,7 @@ class TradingLoop:
                     if qty > 0:
                         (close_long if pos_direction == "long" else close_short)(self.asset, qty)
 
-                self._record_pnl(pnl_pct, usdt_deployed)
+                self._record_pnl(pnl_pct, usdt_deployed, close_reason)
 
                 trade = {
                     **self.open_position,
@@ -541,11 +604,22 @@ class TradingLoop:
         # ------------------------------------------------------------------
         # Entry logic — skip if all_stop is active
         # ------------------------------------------------------------------
+        # Cooldown check: how long since last stop-loss on this pair
+        cooldown_secs     = cooldown_minutes * 60
+        in_cooldown       = (self._last_stop_loss_ts > 0 and
+                             (time.time() - self._last_stop_loss_ts) < cooldown_secs)
+        cooldown_remaining = max(0, cooldown_secs - (time.time() - self._last_stop_loss_ts)) if in_cooldown else 0
+
+        if in_cooldown:
+            print(f"  [COOLDOWN] {self.asset} — {cooldown_remaining/60:.0f}m remaining after stop-loss", flush=True)
+
         if all_stop:
             pass  # no new entries while all_stop is active
         elif (not self.open_position
+                and not in_cooldown
                 and not self._pair_halted(pair_dd_cap)
-                and not PortfolioDrawdown.is_halted(portfolio_dd_cap)):
+                and not PortfolioDrawdown.is_halted(portfolio_dd_cap)
+                and not DailyLossGuard.is_halted(daily_loss_cap, self.capital_usdt)):
 
             usdt_to_deploy = self._deploy_usdt(position_size_r, regime_params)
             # qty with leverage: same capital, larger notional position
@@ -689,20 +763,25 @@ class TradingLoop:
             "or_low":        or_lvls["or_low"]  if or_lvls else None,
             "lq_bullish":    lq["bullish"],
             "lq_bearish":    lq["bearish"],
-            "all_stop":      all_stop,
-            "entry_leverage": entry_leverage,
-            "regime_params": regime_params,
+            "all_stop":           all_stop,
+            "entry_leverage":     entry_leverage,
+            "regime_params":      regime_params,
+            "in_cooldown":        in_cooldown,
+            "cooldown_remaining_m": round(cooldown_remaining / 60, 1) if in_cooldown else 0,
+            "daily_pnl":          DailyLossGuard.summary(),
         })
         self.consecutive_failures = 0
         mode_tag   = "[LIVE]" if is_live() else "[paper]"
         pos_tag    = self.open_position["direction"] if self.open_position else "none"
         rng_tag    = f" rng={rng_pos:.0%}" if (rng_pos is not None) else ""
-        stop_tag   = " ⛔STOP" if all_stop else ""
+        stop_tag     = " ⛔STOP" if all_stop else ""
+        cooldown_tag = f" 🕐{cooldown_remaining/60:.0f}m" if in_cooldown else ""
         print(
             f"{mode_tag} [{self.asset}] price={current_price:.4f} rsi={rsi_15m:.1f} "
             f"pair={pair_regime} macro={regime} lev={entry_leverage}x{rng_tag} "
             f"lq={'B' if lq['bullish'] else 'S' if lq['bearish'] else '-'} "
-            f"dd={self._pair_drawdown():.1%} pos={pos_tag}{stop_tag}",
+            f"dd={self._pair_drawdown():.1%} day=${DailyLossGuard._daily_pnl:+.2f} "
+            f"pos={pos_tag}{stop_tag}{cooldown_tag}",
             flush=True,
         )
 

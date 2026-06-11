@@ -38,6 +38,15 @@ drawdown:
   per_pair_cap:  0.10
   portfolio_cap: 0.08
 
+# Post-loss cooldown: after a stop-loss on a pair, wait before re-entering
+cooldown:
+  after_stop_loss_minutes: 30   # 30 min cooldown per pair after stop-loss
+
+# Daily loss limit: halt all new entries if down more than X% of capital on the day
+# Resets automatically at midnight UTC
+daily_loss:
+  max_loss_pct: 0.03            # 3% of total capital = $30 on $1000
+
 # Dynamic leverage per macro regime
 # Higher in calm/ranging (more predictable), lower in volatile/extreme (capital preservation)
 leverage:
