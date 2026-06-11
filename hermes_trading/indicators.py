@@ -384,6 +384,37 @@ def swing_levels(candles: list[dict], lookback: int = 20) -> dict:
     }
 
 
+def classify_pair_regime(candles_4h: list[dict]) -> str:
+    """
+    Classify a pair's own trend regime from its 4H candles.
+    Independent of the macro BTC regime — each pair gets its own classification.
+
+    Returns:
+      'bull'     — price above 50MA and ADX >= 20 (trending up)
+      'bear'     — price below 50MA and ADX >= 20 (trending down)
+      'sideways' — ADX < 20 (ranging regardless of MA position)
+      'neutral'  — insufficient data
+    """
+    if len(candles_4h) < 30:
+        return "neutral"
+
+    c = [x["close"] for x in candles_4h]
+    h = [x["high"]  for x in candles_4h]
+    l = [x["low"]   for x in candles_4h]
+
+    adx_val = adx(h, l, c, period=14)
+    ma50    = sma(c, 50)
+    price   = c[-1]
+
+    if adx_val is not None and adx_val < 20:
+        return "sideways"
+
+    if ma50 is None:
+        return "neutral"
+
+    return "bull" if price > ma50 else "bear"
+
+
 def range_position(price: float, range_high: float, range_low: float) -> float:
     """
     Where is `price` within [range_low, range_high]?

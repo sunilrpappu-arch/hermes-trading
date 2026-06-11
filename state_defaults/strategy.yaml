@@ -1,8 +1,30 @@
-entry:
-  indicator:       rsi
-  direction:       both
-  long_threshold:  25
-  short_threshold: 65
+# v09 — Regime-separated entry strategy
+# Each pair is classified independently (bull/bear/sideways) using its own 4H ADX + 50MA.
+# Different entry rules apply per regime. MTF is informational only (no hard gate).
+
+# Bull regime: price above 50MA on 4H, ADX >= 20
+# Long bias — buy RSI dips. Short only on confirmed liquidity grabs.
+bull:
+  long_threshold:   35      # RSI < 35 in uptrend → buy the dip
+  short_on_lq_only: true    # shorts only when a liquidity grab is confirmed
+
+# Bear regime: price below 50MA on 4H, ADX >= 20
+# Short bias — sell RSI bounces. Long only on confirmed liquidity grabs.
+bear:
+  short_threshold:  60      # RSI > 60 in downtrend → sell the bounce
+  long_on_lq_only:  true    # longs only when a liquidity grab is confirmed
+
+# Sideways regime: ADX < 20 on 4H — mean-reversion at range extremes
+sideways:
+  adx_threshold:   20.0
+  range_entry_pct: 0.20     # enter when price is in bottom/top 20% of PDH-PDL range
+  or_bars:         4
+  swing_lookback:  20
+
+# MTF signals are logged on every entry but no longer block trades
+mtf:
+  enabled:         true
+  require_signals: 0        # 0 = informational only
 
 trend_filter:
   enabled:   true
@@ -14,22 +36,12 @@ liquidity_grab:
   sweep_pct:             0.002
   overrides_trend_filter: true
 
-mtf:
-  enabled:         true
-  require_signals: 1
-
 drawdown:
   per_pair_cap:  0.10
   portfolio_cap: 0.08
-
-sideways:
-  adx_threshold:   20.0
-  range_entry_pct: 0.20
-  or_bars:         4
-  swing_lookback:  20
 
 take_profit_pct: 3.0
 stop_loss_pct:   1.8
 position_size_r: 0.05
 
-version: '08'
+version: '09'

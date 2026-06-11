@@ -34,6 +34,7 @@ from hermes_trading.indicators import (
     opening_range as compute_opening_range,
     swing_levels as compute_swing_levels,
     range_position,
+    classify_pair_regime,
 )
 from hermes_trading.adapters.candles import closes as get_closes, highs as get_highs, lows as get_lows
 from hermes_trading.notify import send_trade_email
@@ -110,37 +111,45 @@ async def fetch_with_retry(fn, *args, **kwargs):
 
 
 DEFAULT_STRATEGY = {
-    "version": "08",
-    "entry": {
-        "indicator":       "rsi",
-        "direction":       "both",
-        "long_threshold":  25,
-        "short_threshold": 65,
+    "version": "09",
+    # Bull regime: price above 50MA on 4H, ADX >= 20
+    # Long bias — buy RSI dips. Short only on confirmed liquidity grabs.
+    "bull": {
+        "long_threshold":   35,
+        "short_on_lq_only": True,
+    },
+    # Bear regime: price below 50MA on 4H, ADX >= 20
+    # Short bias — sell RSI bounces. Long only on confirmed liquidity grabs.
+    "bear": {
+        "short_threshold":  60,
+        "long_on_lq_only":  True,
+    },
+    # Sideways regime: ADX < 20 on 4H — mean-reversion at range extremes
+    "sideways": {
+        "adx_threshold":   20.0,
+        "range_entry_pct": 0.20,
+        "or_bars":         4,
+        "swing_lookback":  20,
+    },
+    # MTF is informational — logged on entry but no longer a hard gate
+    "mtf": {
+        "enabled":         True,
+        "require_signals": 0,
     },
     "trend_filter": {"enabled": True, "ma_period": 50},
     "liquidity_grab": {
         "enabled":    True,
-        "wick_ratio": 2.0,     # lower wick must be >= 2x candle body
-        "sweep_pct":  0.002,   # must sweep prior swing by at least 0.2%
-        "overrides_trend_filter": True,  # a confirmed grab bypasses trend filter
-    },
-    "mtf": {
-        "enabled":         True,
-        "require_signals": 1,
+        "wick_ratio": 2.0,
+        "sweep_pct":  0.002,
+        "overrides_trend_filter": True,
     },
     "drawdown": {
-        "per_pair_cap":   0.10,   # pause a pair if it loses 10% of its allocated capital
-        "portfolio_cap":  0.08,   # halt all entries if portfolio drops 8%
+        "per_pair_cap":  0.10,
+        "portfolio_cap": 0.08,
     },
     "take_profit_pct":  3.0,
     "stop_loss_pct":    1.8,
     "position_size_r":  0.05,
-    "sideways": {
-        "adx_threshold":   20.0,  # market is ranging below this ADX value
-        "range_entry_pct": 0.20,  # enter within bottom / top 20% of PDH-PDL range
-        "or_bars":         4,     # opening range = first 4 × 15m candles of UTC day
-        "swing_lookback":  20,    # bars to look back for swing high / low
-    },
 }
 
 
@@ -269,23 +278,16 @@ class TradingLoop:
 
     async def tick(self, market_data: dict = None):
         strategy        = load_strategy()
-        entry_cfg       = strategy.get("entry", {})
         trend_cfg       = strategy.get("trend_filter", {})
-        mtf_cfg         = strategy.get("mtf", {})
         lq_cfg          = strategy.get("liquidity_grab", {})
         dd_cfg          = strategy.get("drawdown", {})
 
-        direction_mode    = entry_cfg.get("direction", "both")
-        long_threshold    = entry_cfg.get("long_threshold", 25)
-        short_threshold   = entry_cfg.get("short_threshold", 65)
-        trend_enabled     = trend_cfg.get("enabled", True)
-        ma_period         = trend_cfg.get("ma_period", 50)
-        mtf_enabled       = mtf_cfg.get("enabled", True)
-        require_signals   = mtf_cfg.get("require_signals", 1)
-        lq_enabled        = lq_cfg.get("enabled", True)
+        trend_enabled      = trend_cfg.get("enabled", True)
+        ma_period          = trend_cfg.get("ma_period", 50)
+        lq_enabled         = lq_cfg.get("enabled", True)
         lq_overrides_trend = lq_cfg.get("overrides_trend_filter", True)
-        pair_dd_cap       = dd_cfg.get("per_pair_cap", 0.10)
-        portfolio_dd_cap  = dd_cfg.get("portfolio_cap", 0.08)
+        pair_dd_cap        = dd_cfg.get("per_pair_cap", 0.10)
+        portfolio_dd_cap   = dd_cfg.get("portfolio_cap", 0.08)
 
         sw_cfg            = strategy.get("sideways", {})
         sw_entry_pct      = sw_cfg.get("range_entry_pct", 0.20)
@@ -423,10 +425,19 @@ class TradingLoop:
                       flush=True)
 
         # ------------------------------------------------------------------
-        # Entry logic
+        # Per-pair regime classification (independent of macro BTC regime)
+        # Uses 4H ADX + 50MA to classify this specific pair
+        # ------------------------------------------------------------------
+        candles_4h_raw = candles.get("4h", [])
+        pair_regime    = classify_pair_regime(candles_4h_raw) if len(candles_4h_raw) >= 30 else "neutral"
+
+        bull_cfg = strategy.get("bull", {})
+        bear_cfg = strategy.get("bear", {})
+
+        # ------------------------------------------------------------------
+        # Entry logic — separate strategy per regime
         # ------------------------------------------------------------------
         if (not self.open_position
-                and trend != "warming_up"
                 and not self._pair_halted(pair_dd_cap)
                 and not PortfolioDrawdown.is_halted(portfolio_dd_cap)):
 
@@ -436,75 +447,55 @@ class TradingLoop:
             htf_reasons    = []
             lq_note        = ""
 
-            # --- Long ---
-            if direction_mode in ("long", "both"):
-                rsi_ok   = rsi_15m < long_threshold
-                trend_ok = (not trend_enabled) or trend == "uptrend"
-                lq_ok    = lq_enabled and lq["bullish"] and lq_overrides_trend
+            lq_bull = lq_enabled and lq["bullish"]
+            lq_bear = lq_enabled and lq["bearish"]
 
-                if rsi_ok and (trend_ok or lq_ok):
-                    if lq_ok and not trend_ok:
-                        lq_note = f"lq_grab(wick={lq['wick_pct']:.3%})"
+            if pair_regime == "bull":
+                # ── BULL: buy RSI dips in uptrend; short only on lq grabs ──
+                bull_long_thr = bull_cfg.get("long_threshold", 35)
+                if rsi_15m < bull_long_thr and trend == "uptrend":
+                    _, htf_reasons = self._htf_signals_long(candles)
+                    new_direction  = "long"
+                elif bull_cfg.get("short_on_lq_only", True) and lq_bear:
+                    lq_note       = f"lq_grab_bear(wick={lq['wick_pct']:.3%})"
+                    _, htf_reasons = self._htf_signals_short(candles)
+                    new_direction  = "short"
 
-                    if mtf_enabled:
-                        htf_count, htf_reasons = self._htf_signals_long(candles)
-                        if htf_count >= require_signals:
-                            new_direction = "long"
-                    else:
-                        new_direction  = "long"
-                        htf_reasons    = ["mtf_disabled"]
+            elif pair_regime == "bear":
+                # ── BEAR: sell RSI bounces in downtrend; long only on lq grabs ──
+                bear_short_thr = bear_cfg.get("short_threshold", 60)
+                if rsi_15m > bear_short_thr and trend == "downtrend":
+                    _, htf_reasons = self._htf_signals_short(candles)
+                    new_direction  = "short"
+                elif bear_cfg.get("long_on_lq_only", True) and lq_bull:
+                    lq_note       = f"lq_grab_bull(wick={lq['wick_pct']:.3%})"
+                    _, htf_reasons = self._htf_signals_long(candles)
+                    new_direction  = "long"
 
-            # --- Short ---
-            if new_direction is None and direction_mode in ("short", "both"):
-                rsi_ok   = rsi_15m > short_threshold
-                trend_ok = (not trend_enabled) or trend == "downtrend"
-                lq_ok    = lq_enabled and lq["bearish"] and lq_overrides_trend
+            elif pair_regime == "sideways":
+                # ── SIDEWAYS: mean-reversion at PDH/PDL range extremes ──
+                if rng_pos is not None and rng_high and rng_low:
+                    rng_total = rng_high - rng_low
+                    if rng_total > 0:
+                        if rng_pos <= sw_entry_pct:
+                            lq_note       = f"range_bottom({rng_pos:.1%})"
+                            _, htf_reasons = self._htf_signals_long(candles)
+                            new_direction  = "long"
+                        elif rng_pos >= (1.0 - sw_entry_pct):
+                            lq_note       = f"range_top({rng_pos:.1%})"
+                            _, htf_reasons = self._htf_signals_short(candles)
+                            new_direction  = "short"
 
-                if rsi_ok and (trend_ok or lq_ok):
-                    if lq_ok and not trend_ok:
-                        lq_note = f"lq_grab(wick={lq['wick_pct']:.3%})"
-
-                    if mtf_enabled:
-                        htf_count, htf_reasons = self._htf_signals_short(candles)
-                        if htf_count >= require_signals:
-                            new_direction = "short"
-                    else:
-                        new_direction  = "short"
-                        htf_reasons    = ["mtf_disabled"]
-
-            # --- Sideways / range mean-reversion ---
-            # Only enters when regime is sideways AND price is at range extreme.
-            # PDH-PDL defines the range; bottom/top 20% are the entry zones.
-            # Still requires MTF MACD confirmation to filter false bounces.
-            if new_direction is None and is_sideways and rng_pos is not None and rng_high and rng_low:
-                rng_total = rng_high - rng_low
-
-                if rng_total > 0:
-                    # Long: price in bottom 20% of range (near support)
-                    if direction_mode in ("long", "both") and rng_pos <= sw_entry_pct:
-                        range_tag = f"range_bottom({rng_pos:.1%} of {rng_total:.4f})"
-                        if mtf_enabled:
-                            htf_count, htf_reasons = self._htf_signals_long(candles)
-                            if htf_count >= require_signals:
-                                new_direction = "long"
-                                lq_note       = range_tag
-                        else:
-                            new_direction = "long"
-                            htf_reasons   = ["mtf_disabled"]
-                            lq_note       = range_tag
-
-                    # Short: price in top 20% of range (near resistance)
-                    elif direction_mode in ("short", "both") and rng_pos >= (1.0 - sw_entry_pct):
-                        range_tag = f"range_top({rng_pos:.1%} of {rng_total:.4f})"
-                        if mtf_enabled:
-                            htf_count, htf_reasons = self._htf_signals_short(candles)
-                            if htf_count >= require_signals:
-                                new_direction = "short"
-                                lq_note       = range_tag
-                        else:
-                            new_direction = "short"
-                            htf_reasons   = ["mtf_disabled"]
-                            lq_note       = range_tag
+            else:
+                # ── NEUTRAL / warming up: fallback RSI logic ──
+                if rsi_15m < 30 and (trend == "uptrend" or lq_bull):
+                    lq_note = f"lq_grab(wick={lq['wick_pct']:.3%})" if lq_bull and trend != "uptrend" else ""
+                    _, htf_reasons = self._htf_signals_long(candles)
+                    new_direction  = "long"
+                elif rsi_15m > 70 and (trend == "downtrend" or lq_bear):
+                    lq_note = f"lq_grab(wick={lq['wick_pct']:.3%})" if lq_bear and trend != "downtrend" else ""
+                    _, htf_reasons = self._htf_signals_short(candles)
+                    new_direction  = "short"
 
             if new_direction:
                 if is_live():
@@ -522,6 +513,7 @@ class TradingLoop:
                     "rsi_at_entry":     round(rsi_15m, 2),
                     "trend_at_entry":   trend,
                     "regime_at_entry":  regime,
+                    "pair_regime":      pair_regime,
                     "is_sideways":      is_sideways,
                     "range_pos_at_entry": round(rng_pos, 4) if rng_pos is not None else None,
                     "range_high":       round(rng_high, 6) if rng_high else None,
@@ -556,10 +548,10 @@ class TradingLoop:
         self.consecutive_failures = 0
         mode_tag   = "[LIVE]" if is_live() else "[paper]"
         pos_tag    = self.open_position["direction"] if self.open_position else "none"
-        sw_tag     = f" rng={rng_pos:.0%}" if (is_sideways and rng_pos is not None) else ""
+        rng_tag    = f" rng={rng_pos:.0%}" if (rng_pos is not None) else ""
         print(
             f"{mode_tag} [{self.asset}] price={current_price:.4f} rsi={rsi_15m:.1f} "
-            f"trend={trend} regime={regime}{sw_tag} "
+            f"pair={pair_regime} macro={regime}{rng_tag} "
             f"lq={'B' if lq['bullish'] else 'S' if lq['bearish'] else '-'} "
             f"dd={self._pair_drawdown():.1%} pos={pos_tag}",
             flush=True,
