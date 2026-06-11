@@ -19,8 +19,12 @@ import math
 import time
 import httpx
 
-from hermes_trading.adapters.candles import fetch as fetch_candles, closes as get_closes
-from hermes_trading.indicators import rsi as compute_rsi, sma
+from hermes_trading.adapters.candles import fetch as fetch_candles, closes as get_closes, highs as get_highs, lows as get_lows
+from hermes_trading.indicators import (
+    rsi as compute_rsi, sma, rsi_divergence,
+    liquidity_grab as detect_liquidity_grab,
+    breakout_detector, macd as compute_macd,
+)
 
 # ---------------------------------------------------------------------------
 # Universe filters
@@ -235,16 +239,35 @@ async def _score_all(universe: list[str], regime_vol: float) -> dict[str, float]
 
 
 async def _score_pair(pair: str, regime_vol: float) -> float:
-    """Score a single pair 0–100. Higher = better candidate right now."""
-    candles = await fetch_candles(pair, "1h", 100)
-    if len(candles) < 20:
+    """
+    Score a single pair 0–100 base + up to 40 conviction bonus.
+
+    Base score (0–100):
+      30 pts  Liquidity       (log-normalised 24h USDT volume)
+      25 pts  Signal strength (RSI distance from neutral 50)
+      25 pts  Trend clarity   (price distance from 50MA)
+      20 pts  Volatility fit  (pair's vol vs regime vol)
+
+    Conviction bonus (+5–40 pts):
+      Each additional confirming signal adds pts on top of the base score.
+      Pairs with multiple aligned signals always rank above single-signal pairs
+      of equal liquidity, ensuring the top-5 slots go to highest-conviction setups.
+
+      +10  RSI extreme (>70 or <30) — strong momentum signal
+      +10  RSI divergence (bullish or bearish on 1H) — reversal confirmation
+      +10  Breakout or breakdown on 1H — momentum continuation
+      +10  Liquidity grab (15m wick sweep) — stop-hunt reversal
+      +5   MACD crossover (1H) — trend confirmation
+    """
+    candles_1h = await fetch_candles(pair, "1h", 100)
+    if len(candles_1h) < 20:
         return 0.0
 
-    c             = get_closes(candles)
+    c             = get_closes(candles_1h)
     current_price = c[-1]
 
     # 1. Liquidity (30 pts)
-    volume_24h     = sum(k["volume"] for k in candles[-24:])
+    volume_24h     = sum(k["volume"] for k in candles_1h[-24:])
     liquidity_score = min(math.log10(max(volume_24h, 1)) / 10, 1.0) * 30
 
     # 2. Signal strength — how far RSI is from neutral (25 pts)
@@ -262,7 +285,57 @@ async def _score_pair(pair: str, regime_vol: float) -> float:
     vol_delta      = abs(pair_vol - regime_vol)
     vol_fit_score  = max(0.0, 1.0 - vol_delta / max(regime_vol, 0.001)) * 20
 
-    return round(liquidity_score + signal_score + clarity_score + vol_fit_score, 2)
+    base_score = liquidity_score + signal_score + clarity_score + vol_fit_score
+
+    # 5. Conviction bonus — multiple aligned signals boost ranking
+    conviction = 0
+    signals    = []
+
+    # RSI extreme (+10)
+    if rsi_val > 70 or rsi_val < 30:
+        conviction += 10
+        signals.append(f"rsi_extreme({rsi_val:.0f})")
+
+    # RSI divergence on 1H (+10)
+    try:
+        div = rsi_divergence(c)
+        if div["bullish"] or div["bearish"]:
+            conviction += 10
+            signals.append("rsi_div")
+    except Exception:
+        pass
+
+    # Breakout / breakdown on 1H (+10)
+    try:
+        bo = breakout_detector(candles_1h)
+        if bo["breakout"] or bo["breakdown"] or bo["false_breakout"] or bo["false_breakdown"]:
+            conviction += 10
+            signals.append("breakout" if bo["breakout"] or bo["breakdown"] else "false_bo")
+    except Exception:
+        pass
+
+    # Liquidity grab on 1H (+10)
+    try:
+        lq = detect_liquidity_grab(candles_1h)
+        if lq["bullish"] or lq["bearish"]:
+            conviction += 10
+            signals.append(f"lq_grab")
+    except Exception:
+        pass
+
+    # MACD crossover on 1H (+5)
+    try:
+        m = compute_macd(c)
+        if m and (m["crossover_bullish"] or m["crossover_bearish"]):
+            conviction += 5
+            signals.append("macd_cross")
+    except Exception:
+        pass
+
+    total = round(base_score + conviction, 2)
+    if signals:
+        print(f"[scanner] {pair} base={base_score:.1f} +{conviction}pts ({', '.join(signals)}) → {total}", flush=True)
+    return total
 
 
 # ---------------------------------------------------------------------------
