@@ -404,22 +404,22 @@ function renderPairs(heartbeats) {
 
         <div class="grid grid-cols-3 gap-x-3 gap-y-1 text-xs mb-3">
           <div><span class="text-slate-500">Entry </span><span class="text-white font-mono">$${entry.toFixed(6)}</span></div>
-          <div><span class="text-slate-500">Now </span><span class="text-white font-mono">$${current.toFixed(6)}</span></div>
-          <div><span class="text-slate-500">PnL </span><span class="font-bold font-mono" style="color:${pnlColor}">${pnlPct>=0?'+':''}${pnlPct.toFixed(3)}%</span></div>
+          <div><span class="text-slate-500">Now </span><span class="text-white font-mono" data-live-asset="${asset}" data-field="price">$${current.toFixed(6)}</span></div>
+          <div><span class="text-slate-500">PnL </span><span class="font-bold font-mono" data-live-asset="${asset}" data-field="pnlpct" style="color:${pnlColor}">${pnlPct>=0?'+':''}${pnlPct.toFixed(3)}%</span></div>
           <div><span class="text-slate-500">Capital </span><span class="text-slate-300">$${deployed.toFixed(2)}</span></div>
           <div><span class="text-slate-500">Qty </span><span class="text-slate-300">${qty.toPrecision(4)} ${asset.replace('/USDT','')}</span></div>
-          <div><span class="text-slate-500">PnL$ </span><span class="font-mono" style="color:${pnlColor}">${pnlUsd>=0?'+':''}$${pnlUsd.toFixed(4)}</span></div>
+          <div><span class="text-slate-500">PnL$ </span><span class="font-mono" data-live-asset="${asset}" data-field="pnlusd" style="color:${pnlColor}">${pnlUsd>=0?'+':''}$${pnlUsd.toFixed(4)}</span></div>
           <div><span class="text-slate-500">Stop </span><span class="text-red-400 font-mono">$${slPrice.toFixed(6)}</span></div>
           <div><span class="text-slate-500">Target </span><span class="text-emerald-400 font-mono">$${tpPrice.toFixed(6)}</span></div>
           <div><span class="text-slate-500">RSI </span><span class="text-slate-300">${rsi}${rng?' · '+rng:''}</span></div>
         </div>
 
         <div class="w-full rounded-full h-1.5 mb-1" style="background:#1e293b">
-          <div class="h-1.5 rounded-full transition-all duration-500" style="width:${barPct}%;background:${pnlColor}"></div>
+          <div class="h-1.5 rounded-full transition-all duration-500" data-live-asset="${asset}" data-field="bar" style="width:${barPct}%;background:${pnlColor}"></div>
         </div>
         <div class="flex justify-between" style="font-size:0.65rem;color:#475569">
           <span>SL -${slPct}%</span>
-          <span>${pnlPct>=0?'+':''}${pnlPct.toFixed(2)}% of ${tpPct}% target</span>
+          <span data-live-asset="${asset}" data-field="barlabel">${pnlPct>=0?'+':''}${pnlPct.toFixed(2)}% of ${tpPct}% target</span>
           <span>TP +${tpPct}%</span>
         </div>
         ${signals ? `<div class="mt-1" style="font-size:0.65rem;color:#475569">MTF: ${signals}</div>` : ''}
@@ -567,8 +567,19 @@ async function refresh() {
     if (data.cum_pnl?.length) renderPnlChart(data.cum_pnl);
     else renderPnlChart([]);
 
-    // Pairs
-    renderPairs(data.heartbeats || {});
+    // Pairs + populate open positions for live price polling
+    const heartbeats = data.heartbeats || {};
+    renderPairs(heartbeats);
+    _openPositions = {};
+    for (const [asset, hb] of Object.entries(heartbeats)) {
+      if (hb.open_position && hb.open_position.entry_price) {
+        _openPositions[asset] = {
+          ...hb.open_position,
+          take_profit_pct: hb.open_position.take_profit_pct || hb.regime_params?.take_profit_pct || 3.0,
+          stop_loss_pct:   hb.open_position.stop_loss_pct   || hb.regime_params?.stop_loss_pct   || 1.8,
+        };
+      }
+    }
 
     // Trades
     renderTrades(data.recent_trades || []);
@@ -582,9 +593,49 @@ async function refresh() {
   }
 }
 
-// Initial load + 30s polling
+// Track open positions for live price updates
+let _openPositions = {};  // { asset: { entry_price, direction, usdt_deployed, ... } }
+
+// Fast 5-second loop: update prices + PnL for open positions directly from Binance
+async function refreshLivePrices() {
+  const assets = Object.keys(_openPositions);
+  if (!assets.length) return;
+  await Promise.all(assets.map(async asset => {
+    try {
+      const sym = asset.replace('/', '');
+      const r   = await fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${sym}`);
+      if (!r.ok) return;
+      const data  = await r.json();
+      const price = parseFloat(data.price);
+      if (!price) return;
+      const pos   = _openPositions[asset];
+      const mult  = pos.direction === 'long' ? 1 : -1;
+      const entry = parseFloat(pos.entry_price);
+      const pnlPct = ((price - entry) / entry) * mult * 100;
+      const deployed = parseFloat(pos.usdt_deployed || 0);
+      const pnlUsd   = pnlPct / 100 * deployed;
+      const tpPct    = parseFloat(pos.take_profit_pct || 3.0);
+      const slPct    = parseFloat(pos.stop_loss_pct   || 1.8);
+      const pnlColor = pnlPct >= 0 ? '#34d399' : '#f87171';
+      const barPct   = Math.min(Math.abs(pnlPct) / tpPct * 100, 100).toFixed(1);
+
+      // Update all live fields in the expanded card
+      const cardEls = document.querySelectorAll(`[data-live-asset="${asset}"]`);
+      cardEls.forEach(el => {
+        if (el.dataset.field === 'price')   el.textContent = '$' + price.toFixed(6);
+        if (el.dataset.field === 'pnlpct')  { el.textContent = (pnlPct>=0?'+':'') + pnlPct.toFixed(3) + '%'; el.style.color = pnlColor; }
+        if (el.dataset.field === 'pnlusd')  { el.textContent = (pnlUsd>=0?'+':'') + '$' + pnlUsd.toFixed(4); el.style.color = pnlColor; }
+        if (el.dataset.field === 'bar')     { el.style.width = barPct + '%'; el.style.background = pnlColor; }
+        if (el.dataset.field === 'barlabel'){ el.textContent = (pnlPct>=0?'+':'') + pnlPct.toFixed(2) + '% of ' + tpPct + '% target'; }
+      });
+    } catch(e) { /* silent */ }
+  }));
+}
+
+// Initial load + 30s full refresh + 5s live price refresh
 refresh();
 setInterval(refresh, 30000);
+setInterval(refreshLivePrices, 5000);
 </script>
 
 <!-- TradingView widget library -->

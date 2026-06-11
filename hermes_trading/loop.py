@@ -44,7 +44,7 @@ TRADES_FILE    = STATE_DIR / "trades.jsonl"
 STRATEGY_FILE  = STATE_DIR / "strategy.yaml"
 DD_FILE        = STATE_DIR / "drawdown.json"   # portfolio-level drawdown state
 
-LOOP_INTERVAL          = int(os.getenv("LOOP_INTERVAL_SECONDS", "60"))
+LOOP_INTERVAL          = int(os.getenv("LOOP_INTERVAL_SECONDS", "15"))
 MAX_CONSECUTIVE_FAILURES = 5
 RETRY_ATTEMPTS         = 3
 PRICE_HISTORY_MAX      = 200

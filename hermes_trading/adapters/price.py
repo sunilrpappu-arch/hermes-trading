@@ -38,7 +38,7 @@ COINGECKO_IDS = {
 # Simple per-asset cache (TTL 50s) to limit API calls
 _cache: dict[str, dict] = {}
 _cache_ts: dict[str, float] = {}
-_CACHE_TTL = 50
+_CACHE_TTL = 12
 
 
 class SchemaError(Exception):
