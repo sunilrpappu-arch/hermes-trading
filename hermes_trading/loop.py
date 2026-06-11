@@ -747,15 +747,22 @@ class TradingLoop:
                 # AND RSI confirms. This catches overbought/oversold pairs that the
                 # regime gate would otherwise miss (e.g. DOGE bull-regime rng=87% RSI=74).
                 range_override_fired = False
-                range_short_rsi = 65   # RSI > this at range top  → short
-                range_long_rsi  = 35   # RSI < this at range bottom → long
+                range_short_rsi = 70   # RSI must be genuinely overbought to short at range top
+                range_long_rsi  = 30   # RSI must be genuinely oversold  to long at range bottom
                 if rng_pos is not None and rng_high and rng_low and (rng_high - rng_low) > 0:
-                    if rng_pos >= (1.0 - sw_entry_pct) and rsi_15m > range_short_rsi:
+                    # Range extreme short: only fire if RSI overbought AND not actively breaking out
+                    # (bull regime breakout = momentum move, don't fade it)
+                    if (rng_pos >= (1.0 - sw_entry_pct)
+                            and rsi_15m > range_short_rsi
+                            and not bo["breakout"]):
                         lq_note             = f"range_extreme_short({rng_pos:.0%} rsi={rsi_15m:.0f})"
                         _, htf_reasons      = self._htf_signals_short(candles)
                         new_direction       = "short"
                         range_override_fired = True
-                    elif rng_pos <= sw_entry_pct and rsi_15m < range_long_rsi:
+                    # Range extreme long: only fire if RSI oversold AND not actively breaking down
+                    elif (rng_pos <= sw_entry_pct
+                            and rsi_15m < range_long_rsi
+                            and not bo["breakdown"]):
                         lq_note             = f"range_extreme_long({rng_pos:.0%} rsi={rsi_15m:.0f})"
                         _, htf_reasons      = self._htf_signals_long(candles)
                         new_direction       = "long"
