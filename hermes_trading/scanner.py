@@ -30,7 +30,7 @@ from hermes_trading.indicators import rsi as compute_rsi, sma
 _EXCLUDE_CONTAINS = [
     "UP", "DOWN", "BULL", "BEAR",          # leveraged tokens
     "BUSD", "USDC", "TUSD", "USDP",        # stablecoins
-    "FDUSD", "DAI", "USDD",
+    "FDUSD", "DAI", "USDD", "STABLE",      # stablecoins / stable-pegged tokens
     "DEFI", "NFTUSDT",                      # index products
 ]
 
@@ -39,6 +39,8 @@ _EXCLUDE_CONTAINS = [
 _EXCLUDE_EXACT = {
     "XAUT/USDT",   # tokenised gold — illiquid candles, stale data
     "PAXG/USDT",   # tokenised gold — same issues
+    "AEUR/USDT",   # EUR stablecoin
+    "EURI/USDT",   # EUR stablecoin
 }
 
 # Minimum 24h quote volume in USDT to be considered liquid enough
@@ -126,7 +128,9 @@ async def _fetch_coingecko_universe(min_vol_usdt: float) -> list[str]:
                 symbol = coin.get("symbol", "").upper()
                 volume = float(coin.get("total_volume", 0))
 
-                # Skip stablecoins, leveraged tokens, and low-volume coins
+                # Skip malformed, stablecoins, leveraged tokens, low-volume
+                if len(symbol) < 2:
+                    continue
                 if any(excl in symbol for excl in _EXCLUDE_CONTAINS):
                     continue
                 if volume < min_vol_usdt:
