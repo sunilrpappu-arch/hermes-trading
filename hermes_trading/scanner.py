@@ -23,7 +23,7 @@ from hermes_trading.adapters.candles import fetch as fetch_candles, closes as ge
 from hermes_trading.indicators import (
     rsi as compute_rsi, sma, rsi_divergence,
     liquidity_grab as detect_liquidity_grab,
-    breakout_detector, candlestick_patterns, macd as compute_macd,
+    breakout_detector, candlestick_patterns, chart_patterns, macd as compute_macd,
 )
 
 # ---------------------------------------------------------------------------
@@ -333,13 +333,26 @@ async def _score_pair(pair: str, regime_vol: float) -> float:
         pass
 
     # Candlestick pattern confirmation (+10)
-    # A strong candle pattern at a key level adds meaningful conviction
     try:
         cs = candlestick_patterns(candles_1h)
         if cs["bullish_signals"] or cs["bearish_signals"]:
             conviction += 10
             cs_names = cs["bullish_signals"] + cs["bearish_signals"]
             signals.append(f"cs({'|'.join(cs_names)})")
+    except Exception:
+        pass
+
+    # Chart patterns on 1H (+15 for high-confidence patterns like H&S, triangle)
+    # Pairs with a pattern in play are higher priority — clear setup = clear entry
+    try:
+        cp = chart_patterns(candles_1h, lookback=50)
+        all_patterns = cp["bullish_patterns"] + cp["bearish_patterns"]
+        if all_patterns:
+            # Weight by confidence of best pattern
+            best = cp["best_bullish"] or cp["best_bearish"]
+            bonus = int(15 * (best["confidence"] if best else 0.5))
+            conviction += bonus
+            signals.append(f"pattern({'|'.join(all_patterns[:2])})")
     except Exception:
         pass
 

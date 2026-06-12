@@ -544,6 +544,295 @@ def candlestick_patterns(candles: list[dict]) -> dict:
     return result
 
 
+def _candle_swing_highs(candles: list[dict], window: int = 3) -> list[tuple[int, float]]:
+    """Swing highs: index + value pairs where candle high is local maximum."""
+    highs = [c["high"] for c in candles]
+    result = []
+    for i in range(window, len(highs) - window):
+        if highs[i] == max(highs[i - window: i + window + 1]):
+            result.append((i, highs[i]))
+    return result
+
+
+def _candle_swing_lows(candles: list[dict], window: int = 3) -> list[tuple[int, float]]:
+    """Swing lows: index + value pairs where candle low is local minimum."""
+    lows = [c["low"] for c in candles]
+    result = []
+    for i in range(window, len(lows) - window):
+        if lows[i] == min(lows[i - window: i + window + 1]):
+            result.append((i, lows[i]))
+    return result
+
+
+def _linreg_slope(values: list[float]) -> float:
+    """Normalised linear regression slope (slope / mean). Returns 0 if insufficient data."""
+    n = len(values)
+    if n < 2:
+        return 0.0
+    y_mean = sum(values) / n
+    if y_mean == 0:
+        return 0.0
+    x_mean = (n - 1) / 2.0
+    num = sum((i - x_mean) * (v - y_mean) for i, v in enumerate(values))
+    den = sum((i - x_mean) ** 2 for i in range(n))
+    return (num / den) / y_mean if den > 0 else 0.0
+
+
+def chart_patterns(candles: list[dict], lookback: int = 50, swing_window: int = 3) -> dict:
+    """
+    Detect classic chart patterns on the provided candles.
+    Works on any timeframe — use 4H for trend patterns, 1H for entry-level patterns.
+
+    Patterns detected:
+      Reversal:     double_top, double_bottom, head_shoulders, inv_head_shoulders
+      Continuation: bull_flag, bear_flag
+      Triangle:     ascending_triangle, descending_triangle, symmetric_triangle
+      Channel:      ascending_channel, descending_channel
+
+    Returns:
+      {
+        "patterns":         list of pattern dicts
+        "bullish_patterns": list of bullish pattern names
+        "bearish_patterns": list of bearish pattern names
+        "best_bullish":     highest-confidence bullish pattern | None
+        "best_bearish":     highest-confidence bearish pattern | None
+      }
+
+    Each pattern dict:
+      { "name", "bias", "key_level", "confidence", "description" }
+    """
+    empty = {
+        "patterns": [], "bullish_patterns": [], "bearish_patterns": [],
+        "best_bullish": None, "best_bearish": None,
+    }
+    data = candles[-lookback:] if len(candles) > lookback else candles
+    if len(data) < 20:
+        return empty
+
+    highs  = [c["high"]  for c in data]
+    lows   = [c["low"]   for c in data]
+    closes = [c["close"] for c in data]
+
+    swing_h = _candle_swing_highs(data, swing_window)
+    swing_l = _candle_swing_lows(data, swing_window)
+    current = closes[-1]
+    tol     = 0.025   # 2.5% tolerance for level comparisons
+    detected: list[dict] = []
+
+    # ── Double Top ─────────────────────────────────────────────────────────
+    # Two peaks at similar level, valley between them, price near/below neckline
+    if len(swing_h) >= 2:
+        (h1_i, h1), (h2_i, h2) = swing_h[-2], swing_h[-1]
+        if h2_i > h1_i and abs(h1 - h2) / max(h1, 1e-9) <= tol:
+            valley   = min(lows[h1_i: h2_i + 1]) if h1_i < h2_i else h1
+            depth    = (max(h1, h2) - valley) / max(h1, 1e-9)
+            if depth > 0.02:
+                conf = 0.75 if current <= valley * 1.01 else 0.40
+                detected.append({
+                    "name": "double_top", "bias": "bearish",
+                    "key_level": round(valley, 8), "confidence": conf,
+                    "description": f"Double top peaks≈{(h1+h2)/2:.4g} neckline={valley:.4g}",
+                })
+
+    # ── Double Bottom ───────────────────────────────────────────────────────
+    if len(swing_l) >= 2:
+        (l1_i, l1), (l2_i, l2) = swing_l[-2], swing_l[-1]
+        if l2_i > l1_i and abs(l1 - l2) / max(l1, 1e-9) <= tol:
+            peak     = max(highs[l1_i: l2_i + 1]) if l1_i < l2_i else l1
+            depth    = (peak - min(l1, l2)) / max(peak, 1e-9)
+            if depth > 0.02:
+                conf = 0.75 if current >= peak * 0.99 else 0.40
+                detected.append({
+                    "name": "double_bottom", "bias": "bullish",
+                    "key_level": round(peak, 8), "confidence": conf,
+                    "description": f"Double bottom troughs≈{(l1+l2)/2:.4g} neckline={peak:.4g}",
+                })
+
+    # ── Triple Top ──────────────────────────────────────────────────────────
+    if len(swing_h) >= 3:
+        (h1_i, h1), (h2_i, h2), (h3_i, h3) = swing_h[-3], swing_h[-2], swing_h[-1]
+        if h1_i < h2_i < h3_i:
+            avg_peak = (h1 + h2 + h3) / 3
+            if all(abs(h - avg_peak) / max(avg_peak, 1e-9) <= tol for h in (h1, h2, h3)):
+                valley = min(lows[h1_i: h3_i + 1])
+                conf   = 0.80 if current <= valley * 1.01 else 0.45
+                detected.append({
+                    "name": "triple_top", "bias": "bearish",
+                    "key_level": round(valley, 8), "confidence": conf,
+                    "description": f"Triple top peaks≈{avg_peak:.4g} neckline={valley:.4g}",
+                })
+
+    # ── Triple Bottom ────────────────────────────────────────────────────────
+    if len(swing_l) >= 3:
+        (l1_i, l1), (l2_i, l2), (l3_i, l3) = swing_l[-3], swing_l[-2], swing_l[-1]
+        if l1_i < l2_i < l3_i:
+            avg_trough = (l1 + l2 + l3) / 3
+            if all(abs(l - avg_trough) / max(avg_trough, 1e-9) <= tol for l in (l1, l2, l3)):
+                peak = max(highs[l1_i: l3_i + 1])
+                conf = 0.80 if current >= peak * 0.99 else 0.45
+                detected.append({
+                    "name": "triple_bottom", "bias": "bullish",
+                    "key_level": round(peak, 8), "confidence": conf,
+                    "description": f"Triple bottom troughs≈{avg_trough:.4g} neckline={peak:.4g}",
+                })
+
+    # ── Head and Shoulders ──────────────────────────────────────────────────
+    if len(swing_h) >= 3:
+        (ls_i, ls), (hd_i, hd), (rs_i, rs) = swing_h[-3], swing_h[-2], swing_h[-1]
+        if ls_i < hd_i < rs_i and hd > ls and hd > rs:
+            if abs(ls - rs) / max(ls, 1e-9) <= 0.20:
+                lt = min(lows[ls_i: hd_i + 1]) if ls_i < hd_i else ls
+                rt = min(lows[hd_i: rs_i + 1]) if hd_i < rs_i else rs
+                neckline = (lt + rt) / 2
+                conf = 0.75 if current <= neckline * 1.01 else 0.45
+                detected.append({
+                    "name": "head_shoulders", "bias": "bearish",
+                    "key_level": round(neckline, 8), "confidence": conf,
+                    "description": f"H&S head={hd:.4g} shoulders={ls:.4g}/{rs:.4g} neck={neckline:.4g}",
+                })
+
+    # ── Inverse Head and Shoulders ──────────────────────────────────────────
+    if len(swing_l) >= 3:
+        (ls_i, ls), (hd_i, hd), (rs_i, rs) = swing_l[-3], swing_l[-2], swing_l[-1]
+        if ls_i < hd_i < rs_i and hd < ls and hd < rs:
+            if abs(ls - rs) / max(ls, 1e-9) <= 0.20:
+                lp = max(highs[ls_i: hd_i + 1]) if ls_i < hd_i else ls
+                rp = max(highs[hd_i: rs_i + 1]) if hd_i < rs_i else rs
+                neckline = (lp + rp) / 2
+                conf = 0.75 if current >= neckline * 0.99 else 0.45
+                detected.append({
+                    "name": "inv_head_shoulders", "bias": "bullish",
+                    "key_level": round(neckline, 8), "confidence": conf,
+                    "description": f"Inv H&S head={hd:.4g} shoulders={ls:.4g}/{rs:.4g} neck={neckline:.4g}",
+                })
+
+    # ── Triangles ─────────────────────────────────────────────────────────
+    if len(swing_h) >= 3 and len(swing_l) >= 3:
+        slope_h = _linreg_slope([v for _, v in swing_h[-3:]])
+        slope_l = _linreg_slope([v for _, v in swing_l[-3:]])
+        res     = sum(v for _, v in swing_h[-3:]) / 3
+        sup     = sum(v for _, v in swing_l[-3:]) / 3
+        apex    = (res + sup) / 2
+
+        # Ascending: flat top + rising bottom → bullish breakout
+        if abs(slope_h) < 0.005 and slope_l > 0.005:
+            conf = min(0.80, 0.50 + slope_l * 8)
+            detected.append({
+                "name": "ascending_triangle", "bias": "bullish",
+                "key_level": round(res, 8), "confidence": conf,
+                "description": f"Ascending triangle resistance={res:.4g} (breakout target)",
+            })
+        # Descending: flat bottom + falling top → bearish breakdown
+        elif abs(slope_l) < 0.005 and slope_h < -0.005:
+            conf = min(0.80, 0.50 + abs(slope_h) * 8)
+            detected.append({
+                "name": "descending_triangle", "bias": "bearish",
+                "key_level": round(sup, 8), "confidence": conf,
+                "description": f"Descending triangle support={sup:.4g} (breakdown target)",
+            })
+        # Symmetric: converging → neutral, watch breakout direction
+        elif slope_h < -0.003 and slope_l > 0.003:
+            detected.append({
+                "name": "symmetric_triangle", "bias": "neutral",
+                "key_level": round(apex, 8), "confidence": 0.50,
+                "description": f"Symmetric triangle apex≈{apex:.4g} — watch breakout direction",
+            })
+
+    # ── Channels ──────────────────────────────────────────────────────────
+    if len(swing_h) >= 2 and len(swing_l) >= 2:
+        slope_h  = _linreg_slope([v for _, v in swing_h[-2:]])
+        slope_l  = _linreg_slope([v for _, v in swing_l[-2:]])
+        ch_top   = max(v for _, v in swing_h[-2:])
+        ch_bot   = min(v for _, v in swing_l[-2:])
+        parallel = (slope_h != 0 and slope_l != 0 and
+                    abs(slope_h - slope_l) / max(abs(slope_h), abs(slope_l), 1e-9) < 0.60)
+        if parallel:
+            if slope_h > 0.003 and slope_l > 0.003:
+                detected.append({
+                    "name": "ascending_channel", "bias": "bullish",
+                    "key_level": round(ch_bot, 8), "confidence": 0.55,
+                    "description": f"Ascending channel top={ch_top:.4g} bot={ch_bot:.4g} — long at bot",
+                })
+            elif slope_h < -0.003 and slope_l < -0.003:
+                detected.append({
+                    "name": "descending_channel", "bias": "bearish",
+                    "key_level": round(ch_top, 8), "confidence": 0.55,
+                    "description": f"Descending channel top={ch_top:.4g} bot={ch_bot:.4g} — short at top",
+                })
+
+    # ── Bull Flag ──────────────────────────────────────────────────────────
+    # Strong upward pole in first half, tight pullback consolidation in second half
+    n = len(data)
+    if n >= 20:
+        mid        = n // 2
+        pole_c     = closes[:mid]
+        flag_c     = closes[mid:]
+        pole_move  = (pole_c[-1] - pole_c[0]) / max(pole_c[0], 1e-9)
+        flag_slope = _linreg_slope(flag_c)
+        flag_range = max(flag_c) - min(flag_c)
+        pole_range = max(pole_c) - min(pole_c)
+
+        if (pole_move > 0.05
+                and flag_slope < 0
+                and pole_range > 0
+                and flag_range < pole_range * 0.50):
+            conf = min(0.80, 0.50 + pole_move)
+            detected.append({
+                "name": "bull_flag", "bias": "bullish",
+                "key_level": round(max(closes[-5:]), 8), "confidence": conf,
+                "description": f"Bull flag pole={pole_move:.1%} — breakout above flag",
+            })
+        # Bear Flag
+        elif (pole_move < -0.05
+                and flag_slope > 0
+                and pole_range > 0
+                and flag_range < pole_range * 0.50):
+            conf = min(0.80, 0.50 + abs(pole_move))
+            detected.append({
+                "name": "bear_flag", "bias": "bearish",
+                "key_level": round(min(closes[-5:]), 8), "confidence": conf,
+                "description": f"Bear flag pole={pole_move:.1%} — breakdown below flag",
+            })
+
+    # ── Cup and Handle ──────────────────────────────────────────────────────
+    # U-shaped base (rounded bottom) + small handle pullback → bullish breakout
+    if n >= 30:
+        cup      = closes[:int(n * 0.75)]
+        handle   = closes[int(n * 0.75):]
+        cup_top  = max(cup[0], cup[-1])
+        cup_bot  = min(cup)
+        cup_mid  = len(cup) // 2
+        cup_depth = (cup_top - cup_bot) / max(cup_top, 1e-9)
+        # Cup: price recovers back toward the rim
+        cup_recovery = (cup[-1] - cup_bot) / max(cup_top - cup_bot, 1e-9)
+        # Handle: small pullback (< 50% of cup depth)
+        handle_pullback = (max(handle) - min(handle)) / max(cup_top, 1e-9)
+        if (cup_depth > 0.10
+                and cup_recovery > 0.70
+                and handle_pullback < cup_depth * 0.50
+                and _linreg_slope(handle) < 0):   # handle drifts slightly down
+            rim = cup_top
+            conf = min(0.75, 0.50 + cup_depth)
+            detected.append({
+                "name": "cup_and_handle", "bias": "bullish",
+                "key_level": round(rim, 8), "confidence": conf,
+                "description": f"Cup & handle rim={rim:.4g} depth={cup_depth:.1%} — breakout above rim",
+            })
+
+    # ── Summarise ──────────────────────────────────────────────────────────
+    bull = [p for p in detected if p["bias"] == "bullish"]
+    bear = [p for p in detected if p["bias"] == "bearish"]
+    if detected:
+        print(f"[patterns] {', '.join(p['name'] for p in detected)}", flush=True)
+    return {
+        "patterns":         detected,
+        "bullish_patterns": [p["name"] for p in bull],
+        "bearish_patterns": [p["name"] for p in bear],
+        "best_bullish":     max(bull, key=lambda p: p["confidence"]) if bull else None,
+        "best_bearish":     max(bear, key=lambda p: p["confidence"]) if bear else None,
+    }
+
+
 def breakout_detector(
     candles: list[dict],
     lookback: int = 20,

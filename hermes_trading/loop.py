@@ -32,6 +32,7 @@ from hermes_trading.indicators import (
     liquidity_grab as detect_liquidity_grab,
     breakout_detector,
     candlestick_patterns,
+    chart_patterns,
     prev_day_levels,
     opening_range as compute_opening_range,
     swing_levels as compute_swing_levels,
@@ -201,7 +202,7 @@ async def fetch_with_retry(fn, *args, **kwargs):
 
 
 DEFAULT_STRATEGY = {
-    "version": "13",
+    "version": "14",
     # Bull regime: price above 50MA on 4H, ADX >= 20
     # Long bias — buy RSI dips. Short only on confirmed liquidity grabs.
     "bull": {
@@ -441,7 +442,8 @@ class TradingLoop:
     # HTF signal evaluation
     # ------------------------------------------------------------------
 
-    def _htf_signals_long(self, candles: dict) -> tuple[int, list[str]]:
+    def _htf_signals_long(self, candles: dict,
+                          patterns_4h: dict = None, patterns_1h: dict = None) -> tuple[int, list[str]]:
         confirmed = []
         c4h = get_closes(candles.get("4h", []))
         m4h = compute_macd(c4h)
@@ -458,9 +460,17 @@ class TradingLoop:
         m1h = compute_macd(c1h)
         if m1h and m1h["crossover_bullish"]:
             confirmed.append("1H MACD crossover")
+        # Chart patterns count as HTF confirmation (Step 2 feeds Step 3)
+        if patterns_4h:
+            for p in patterns_4h.get("bullish_patterns", []):
+                confirmed.append(f"4H {p.replace('_',' ')}")
+        if patterns_1h:
+            for p in patterns_1h.get("bullish_patterns", []):
+                confirmed.append(f"1H {p.replace('_',' ')}")
         return len(confirmed), confirmed
 
-    def _htf_signals_short(self, candles: dict) -> tuple[int, list[str]]:
+    def _htf_signals_short(self, candles: dict,
+                           patterns_4h: dict = None, patterns_1h: dict = None) -> tuple[int, list[str]]:
         confirmed = []
         c4h = get_closes(candles.get("4h", []))
         m4h = compute_macd(c4h)
@@ -477,6 +487,13 @@ class TradingLoop:
         m1h = compute_macd(c1h)
         if m1h and m1h["crossover_bearish"]:
             confirmed.append("1H MACD crossover")
+        # Chart patterns count as HTF confirmation
+        if patterns_4h:
+            for p in patterns_4h.get("bearish_patterns", []):
+                confirmed.append(f"4H {p.replace('_',' ')}")
+        if patterns_1h:
+            for p in patterns_1h.get("bearish_patterns", []):
+                confirmed.append(f"1H {p.replace('_',' ')}")
         return len(confirmed), confirmed
 
     # ------------------------------------------------------------------
@@ -690,10 +707,33 @@ class TradingLoop:
                       flush=True)
 
         # ------------------------------------------------------------------
-        # Per-pair regime classification (independent of macro BTC regime)
+        # STEP 2: Trend recognition — per-pair regime + chart patterns
         # ------------------------------------------------------------------
         candles_4h_raw = candles.get("4h", [])
         pair_regime    = classify_pair_regime(candles_4h_raw) if len(candles_4h_raw) >= 30 else "neutral"
+
+        # Chart patterns on 4H (trend-level) and 1H (entry-level)
+        _empty_pat = {"patterns": [], "bullish_patterns": [], "bearish_patterns": [],
+                      "best_bullish": None, "best_bearish": None}
+        patterns_4h = (chart_patterns(candles_4h_raw)
+                       if len(candles_4h_raw) >= 30 else _empty_pat)
+        patterns_1h = (chart_patterns(candles_1h_raw)
+                       if len(candles_1h_raw) >= 30 else _empty_pat)
+
+        # Combined pattern bias across both timeframes
+        pat_bull_names = patterns_4h["bullish_patterns"] + patterns_1h["bullish_patterns"]
+        pat_bear_names = patterns_4h["bearish_patterns"] + patterns_1h["bearish_patterns"]
+        pat_bull = bool(pat_bull_names)   # any bullish pattern on 4H or 1H
+        pat_bear = bool(pat_bear_names)   # any bearish pattern on 4H or 1H
+
+        # Strong continuation patterns that should BLOCK counter-trend entries
+        # e.g. ascending triangle in bull regime → don't short
+        _bull_continuation = {"ascending_triangle", "bull_flag", "ascending_channel",
+                               "inv_head_shoulders", "cup_and_handle", "double_bottom", "triple_bottom"}
+        _bear_continuation = {"descending_triangle", "bear_flag", "descending_channel",
+                               "head_shoulders", "double_top", "triple_top"}
+        pat_strong_bull = bool(set(pat_bull_names) & _bull_continuation)
+        pat_strong_bear = bool(set(pat_bear_names) & _bear_continuation)
 
         bull_cfg = strategy.get("bull", {})
         bear_cfg = strategy.get("bear", {})
@@ -771,7 +811,7 @@ class TradingLoop:
                             and not cs_bull_blocks):
                         cs_note = f"+cs({','.join(cs['bearish_signals'])})" if cs_bear_confirms else ""
                         lq_note             = f"range_extreme_short({rng_pos:.0%} rsi={rsi_15m:.0f}){cs_note}"
-                        _, htf_reasons      = self._htf_signals_short(candles)
+                        _, htf_reasons      = self._htf_signals_short(candles, patterns_4h, patterns_1h)
                         new_direction       = "short"
                         range_override_fired = True
 
@@ -784,7 +824,7 @@ class TradingLoop:
                             and not cs_bear_blocks):
                         cs_note = f"+cs({','.join(cs['bullish_signals'])})" if cs_bull_confirms else ""
                         lq_note             = f"range_extreme_long({rng_pos:.0%} rsi={rsi_15m:.0f}){cs_note}"
-                        _, htf_reasons      = self._htf_signals_long(candles)
+                        _, htf_reasons      = self._htf_signals_long(candles, patterns_4h, patterns_1h)
                         new_direction       = "long"
                         range_override_fired = True
 
@@ -800,27 +840,27 @@ class TradingLoop:
                         # 1. Breakout long — confirmed by bull marubozu or engulfing
                         if bo["breakout"] and trend == "uptrend" and not cs["bear_marubozu"]:
                             lq_note        = f"breakout(res={bo['resistance']:.6g}){cs_bull_str}"
-                            _, htf_reasons = self._htf_signals_long(candles)
+                            _, htf_reasons = self._htf_signals_long(candles, patterns_4h, patterns_1h)
                             new_direction  = "long"
                         # 2. RSI dip buy — require bullish candle confirmation (hammer/engulf)
                         elif (rsi_15m < bull_long_thr and trend == "uptrend"
                                 and (cs_bull_ok or lq_bull)):
                             lq_note        = cs_bull_str
-                            _, htf_reasons = self._htf_signals_long(candles)
+                            _, htf_reasons = self._htf_signals_long(candles, patterns_4h, patterns_1h)
                             new_direction  = "long"
                         # 3. Short signals — only fire when not breaking out + bearish candle
                         elif not bo["breakout"]:
                             if bo["false_breakout"] and cs_bear_ok:
                                 lq_note        = f"false_breakout(res={bo['resistance']:.6g}){cs_bear_str}"
-                                _, htf_reasons = self._htf_signals_short(candles)
+                                _, htf_reasons = self._htf_signals_short(candles, patterns_4h, patterns_1h)
                                 new_direction  = "short"
                             elif rsi_div_15m["bearish"] and cs_bear_ok:
                                 lq_note        = f"rsi_div_bearish_15m{cs_bear_str}"
-                                _, htf_reasons = self._htf_signals_short(candles)
+                                _, htf_reasons = self._htf_signals_short(candles, patterns_4h, patterns_1h)
                                 new_direction  = "short"
                             elif bull_cfg.get("short_on_lq_only", True) and lq_bear and cs_bear_ok:
                                 lq_note        = f"lq_grab_bear(wick={lq['wick_pct']:.3%}){cs_bear_str}"
-                                _, htf_reasons = self._htf_signals_short(candles)
+                                _, htf_reasons = self._htf_signals_short(candles, patterns_4h, patterns_1h)
                                 new_direction  = "short"
 
                     elif pair_regime == "bear":
@@ -828,27 +868,27 @@ class TradingLoop:
                         # 1. Breakdown short — confirmed by bear marubozu or engulfing
                         if bo["breakdown"] and trend == "downtrend" and not cs["bull_marubozu"]:
                             lq_note        = f"breakdown(sup={bo['support']:.6g}){cs_bear_str}"
-                            _, htf_reasons = self._htf_signals_short(candles)
+                            _, htf_reasons = self._htf_signals_short(candles, patterns_4h, patterns_1h)
                             new_direction  = "short"
                         # 2. RSI bounce short — require bearish candle confirmation
                         elif (rsi_15m > bear_short_thr and trend == "downtrend"
                                 and (cs_bear_ok or lq_bear)):
                             lq_note        = cs_bear_str
-                            _, htf_reasons = self._htf_signals_short(candles)
+                            _, htf_reasons = self._htf_signals_short(candles, patterns_4h, patterns_1h)
                             new_direction  = "short"
                         # 3. Long signals — only fire when not breaking down + bullish candle
                         elif not bo["breakdown"]:
                             if bo["false_breakdown"] and cs_bull_ok:
                                 lq_note        = f"false_breakdown(sup={bo['support']:.6g}){cs_bull_str}"
-                                _, htf_reasons = self._htf_signals_long(candles)
+                                _, htf_reasons = self._htf_signals_long(candles, patterns_4h, patterns_1h)
                                 new_direction  = "long"
                             elif rsi_div_15m["bullish"] and cs_bull_ok:
                                 lq_note        = f"rsi_div_bullish_15m{cs_bull_str}"
-                                _, htf_reasons = self._htf_signals_long(candles)
+                                _, htf_reasons = self._htf_signals_long(candles, patterns_4h, patterns_1h)
                                 new_direction  = "long"
                             elif bear_cfg.get("long_on_lq_only", True) and lq_bull and cs_bull_ok:
                                 lq_note        = f"lq_grab_bull(wick={lq['wick_pct']:.3%}){cs_bull_str}"
-                                _, htf_reasons = self._htf_signals_long(candles)
+                                _, htf_reasons = self._htf_signals_long(candles, patterns_4h, patterns_1h)
                                 new_direction  = "long"
 
                     elif pair_regime == "sideways":
@@ -858,12 +898,12 @@ class TradingLoop:
                                 # Range bottom long — need bullish candle, no strong bear momentum
                                 if rng_pos <= sw_entry_pct and (cs_bull_ok or lq_bull):
                                     lq_note        = f"range_bottom({rng_pos:.1%}){cs_bull_str}"
-                                    _, htf_reasons = self._htf_signals_long(candles)
+                                    _, htf_reasons = self._htf_signals_long(candles, patterns_4h, patterns_1h)
                                     new_direction  = "long"
                                 # Range top short — need bearish candle, no strong bull momentum
                                 elif rng_pos >= (1.0 - sw_entry_pct) and (cs_bear_ok or lq_bear):
                                     lq_note        = f"range_top({rng_pos:.1%}){cs_bear_str}"
-                                    _, htf_reasons = self._htf_signals_short(candles)
+                                    _, htf_reasons = self._htf_signals_short(candles, patterns_4h, patterns_1h)
                                     new_direction  = "short"
 
                     else:
@@ -873,15 +913,26 @@ class TradingLoop:
                                 lq_note = f"rsi_div_bullish_15m{cs_bull_str}"
                             elif lq_bull and trend != "uptrend":
                                 lq_note = f"lq_grab(wick={lq['wick_pct']:.3%}){cs_bull_str}"
-                            _, htf_reasons = self._htf_signals_long(candles)
+                            _, htf_reasons = self._htf_signals_long(candles, patterns_4h, patterns_1h)
                             new_direction  = "long"
                         elif (rsi_div_15m["bearish"] or (rsi_15m > 70 and (trend == "downtrend" or lq_bear))) and cs_bear_ok:
                             if rsi_div_15m["bearish"]:
                                 lq_note = f"rsi_div_bearish_15m{cs_bear_str}"
                             elif lq_bear and trend != "downtrend":
                                 lq_note = f"lq_grab(wick={lq['wick_pct']:.3%}){cs_bear_str}"
-                            _, htf_reasons = self._htf_signals_short(candles)
+                            _, htf_reasons = self._htf_signals_short(candles, patterns_4h, patterns_1h)
                             new_direction  = "short"
+
+            # ------------------------------------------------------------------
+            # STEP 2b: Pattern blocking — strong continuation patterns block
+            # counter-trend entries (e.g. ascending triangle → no shorts)
+            # ------------------------------------------------------------------
+            if new_direction == "short" and pat_strong_bull:
+                print(f"  [PATTERN BLOCK] {self.asset} short blocked — bullish pattern active: {pat_bull_names}", flush=True)
+                new_direction = None
+            elif new_direction == "long" and pat_strong_bear:
+                print(f"  [PATTERN BLOCK] {self.asset} long blocked — bearish pattern active: {pat_bear_names}", flush=True)
+                new_direction = None
 
             # ------------------------------------------------------------------
             # MTF soft gate — require ≥N HTF confirmations before entering
@@ -963,6 +1014,8 @@ class TradingLoop:
             "rsi_div_bear":  rsi_div_15m["bearish"],
             "cs_bullish":    cs["bullish_signals"],
             "cs_bearish":    cs["bearish_signals"],
+            "patterns_bull": pat_bull_names,
+            "patterns_bear": pat_bear_names,
             "all_stop":           all_stop,
             "entry_leverage":     entry_leverage,
             "regime_params":      regime_params,
