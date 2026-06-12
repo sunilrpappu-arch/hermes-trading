@@ -23,10 +23,12 @@ sideways:
   or_bars:         4
   swing_lookback:  20
 
-# MTF signals are logged on every entry but no longer block trades
+# MTF soft gate: require at least 1 higher-timeframe confirmation before entering
+# Exceptions: manual entries and liquidity grabs bypass this gate
+# Signals: 4H MACD bull/bear, 4H above/below 50MA, 1H RSI divergence, 1H MACD crossover
 mtf:
   enabled:         true
-  require_signals: 0
+  require_signals: 1   # ≥1 HTF signal required (0 = disabled)
 
 trend_filter:
   enabled:   true

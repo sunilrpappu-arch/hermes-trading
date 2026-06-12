@@ -201,7 +201,7 @@ async def fetch_with_retry(fn, *args, **kwargs):
 
 
 DEFAULT_STRATEGY = {
-    "version": "12",
+    "version": "13",
     # Bull regime: price above 50MA on 4H, ADX >= 20
     # Long bias — buy RSI dips. Short only on confirmed liquidity grabs.
     "bull": {
@@ -501,6 +501,9 @@ class TradingLoop:
         max_leverage       = float(lev_cfg.get("max_leverage", 3.0))
         cooldown_minutes   = float(cooldown_cfg.get("after_stop_loss_minutes", 30))
         daily_loss_cap     = float(daily_loss_cfg.get("max_loss_pct", 0.03))
+
+        mtf_cfg            = strategy.get("mtf", {})
+        mtf_require        = int(mtf_cfg.get("require_signals", 1))   # ≥1 HTF signal required
 
         sw_cfg            = strategy.get("sideways", {})
         sw_entry_pct      = sw_cfg.get("range_entry_pct", 0.20)
@@ -879,6 +882,24 @@ class TradingLoop:
                                 lq_note = f"lq_grab(wick={lq['wick_pct']:.3%}){cs_bear_str}"
                             _, htf_reasons = self._htf_signals_short(candles)
                             new_direction  = "short"
+
+            # ------------------------------------------------------------------
+            # MTF soft gate — require ≥N HTF confirmations before entering
+            # Exceptions: manual entries and liquidity grabs bypass the gate
+            # (high-conviction price-action signals are self-confirming)
+            # ------------------------------------------------------------------
+            if new_direction and mtf_require > 0:
+                is_manual  = lq_note == "manual_entry"
+                is_lq      = lq_note and "lq_grab" in lq_note
+                if not is_manual and not is_lq:
+                    if len(htf_reasons) < mtf_require:
+                        print(
+                            f"  [MTF GATE] {self.asset} {new_direction.upper()} blocked — "
+                            f"only {len(htf_reasons)}/{mtf_require} HTF signals "
+                            f"({', '.join(htf_reasons) or 'none'})",
+                            flush=True,
+                        )
+                        new_direction = None   # block entry
 
             if new_direction:
                 if is_live():
