@@ -1,4 +1,4 @@
-# v18 — Dynamic SL/TP from structural levels (swing high/low, range extreme, Fibonacci)
+# v20 — Black swan / crash detection + Fear/Greed market sentiment meter
 # Each pair is classified independently (bull/bear/sideways) using its own 4H ADX + 50MA.
 # New in v11:
 #   - Bull regime: breakout long above resistance; false-breakout short; bearish RSI divergence short
@@ -67,4 +67,4 @@ take_profit_pct: 3.0
 stop_loss_pct:   1.8
 position_size_r: 0.05
 
-version: '18'
+version: '20'

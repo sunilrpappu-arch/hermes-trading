@@ -164,6 +164,7 @@ async def api_state():
     strategy  = _read_strategy()
     stats     = _portfolio_stats(trades)
     cum_pnl   = _cumulative_pnl(trades)
+    sentiment = _read_sentiment()
 
     # Detect current regime from any active heartbeat
     regime     = "unknown"
@@ -188,6 +189,7 @@ async def api_state():
         "cum_pnl":       cum_pnl,
         "heartbeats":    heartbeats,
         "recent_trades": list(reversed(trades)),  # all trades, newest first — paginated client-side
+        "sentiment":     sentiment,
     })
 
 
@@ -257,6 +259,21 @@ async def api_reset_stats():
 @app.get("/api/pairs")
 async def api_pairs():
     return JSONResponse({"pairs": _read_heartbeats()})
+
+
+def _read_sentiment() -> dict:
+    sf = STATE_DIR / "sentiment.json"
+    if not sf.exists():
+        return {}
+    try:
+        return json.loads(sf.read_text())
+    except Exception:
+        return {}
+
+
+@app.get("/api/sentiment")
+async def api_sentiment():
+    return JSONResponse(_read_sentiment())
 
 
 def _read_controls() -> dict:
@@ -460,6 +477,64 @@ _HTML = r"""<!DOCTYPE html>
     <p class="text-slate-400 text-xs mb-1">PORTFOLIO DD</p>
     <p id="stat-dd" class="text-2xl font-bold">0%</p>
   </div>
+</div>
+
+<!-- Black Swan Alert Banner (hidden when normal) -->
+<div id="swan-banner" class="mb-6 rounded-xl px-5 py-4 hidden"
+     style="background:#1a0808;border:1px solid #7f1d1d;">
+  <div class="flex items-start gap-3">
+    <span id="swan-icon" class="text-2xl">🚨</span>
+    <div class="flex-1">
+      <p id="swan-title" class="text-red-300 font-bold text-sm mb-1">BLACK SWAN ALERT</p>
+      <div id="swan-events" class="text-red-400 text-xs space-y-0.5"></div>
+    </div>
+    <span id="swan-action" class="text-red-300 text-xs font-semibold bg-red-950 px-2 py-1 rounded"></span>
+  </div>
+</div>
+
+<!-- Fear/Greed + Macro row -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+
+  <!-- Fear/Greed gauge -->
+  <div class="card col-span-1">
+    <p class="text-slate-400 text-xs font-semibold mb-3">MARKET SENTIMENT</p>
+    <div class="flex flex-col items-center">
+      <!-- Gauge arc via SVG -->
+      <div style="position:relative;width:180px;height:100px;overflow:hidden;">
+        <svg width="180" height="100" viewBox="0 0 180 100">
+          <!-- Background arc -->
+          <path d="M10,90 A80,80 0 0,1 170,90" fill="none" stroke="#1e293b" stroke-width="16" stroke-linecap="round"/>
+          <!-- Colour gradient segments (5 equal arcs) -->
+          <!-- Each arc covers 36° of the 180° semicircle -->
+          <!-- Extreme Fear: red -->
+          <path d="M10,90 A80,80 0 0,1 42,26" fill="none" stroke="#ef4444" stroke-width="16" stroke-linecap="butt" opacity="0.5"/>
+          <!-- Fear: orange -->
+          <path d="M42,26 A80,80 0 0,1 90,10" fill="none" stroke="#f97316" stroke-width="16" stroke-linecap="butt" opacity="0.5"/>
+          <!-- Neutral: slate -->
+          <path d="M90,10 A80,80 0 0,1 138,26" fill="none" stroke="#64748b" stroke-width="16" stroke-linecap="butt" opacity="0.5"/>
+          <!-- Greed: teal -->
+          <path d="M138,26 A80,80 0 0,1 170,90" fill="none" stroke="#10b981" stroke-width="16" stroke-linecap="butt" opacity="0.5"/>
+          <!-- Needle -->
+          <line id="fg-needle" x1="90" y1="90" x2="90" y2="18"
+            stroke="#e2e8f0" stroke-width="2.5" stroke-linecap="round"
+            transform="rotate(0, 90, 90)"/>
+          <circle cx="90" cy="90" r="5" fill="#e2e8f0"/>
+        </svg>
+        <div style="position:absolute;bottom:2px;width:100%;text-align:center;">
+          <span id="fg-score-num" class="text-3xl font-bold text-white">—</span>
+        </div>
+      </div>
+      <p id="fg-label" class="text-sm font-bold mt-1 text-slate-300">Loading…</p>
+      <div id="fg-signals" class="mt-2 space-y-0.5 text-center"></div>
+    </div>
+  </div>
+
+  <!-- Macro regime signals -->
+  <div class="card col-span-2">
+    <p class="text-slate-400 text-xs font-semibold mb-3">MACRO SIGNALS</p>
+    <div id="macro-signals-grid" class="grid grid-cols-2 gap-3"></div>
+  </div>
+
 </div>
 
 <!-- Controls Panel -->
@@ -906,6 +981,136 @@ function renderPnlChart(points) {
   });
 }
 
+// ── Fear/Greed + Black Swan rendering ───────────────────────────────────────
+
+function renderSentiment(sentiment) {
+  const fg   = sentiment.fear_greed || {};
+  const swan = sentiment.black_swan || {};
+
+  // ── Fear/Greed gauge ──────────────────────────────────────────────────────
+  const score = fg.score != null ? parseInt(fg.score) : null;
+  const label = fg.label || 'No data';
+  const emoji = fg.emoji || '⚪';
+
+  const scoreEl  = document.getElementById('fg-score-num');
+  const labelEl  = document.getElementById('fg-label');
+  const needleEl = document.getElementById('fg-needle');
+  const sigEl    = document.getElementById('fg-signals');
+
+  if (scoreEl) scoreEl.textContent = score != null ? score : '—';
+  if (labelEl) {
+    labelEl.textContent = emoji + ' ' + label;
+    // Colour based on zone
+    const col = score == null     ? '#64748b'
+              : score < 20        ? '#ef4444'
+              : score < 35        ? '#f97316'
+              : score < 50        ? '#eab308'
+              : score < 65        ? '#64748b'
+              : score < 80        ? '#10b981'
+              :                     '#34d399';
+    labelEl.style.color = col;
+  }
+
+  // Rotate needle: score 0 → -90deg (left), score 50 → 0deg (top), score 100 → +90deg (right)
+  if (needleEl && score != null) {
+    const angle = (score / 100) * 180 - 90;
+    needleEl.setAttribute('transform', `rotate(${angle}, 90, 90)`);
+  }
+
+  if (sigEl && fg.signals) {
+    sigEl.innerHTML = fg.signals.map(s =>
+      `<p class="text-slate-500 text-xs">${s}</p>`
+    ).join('');
+  }
+
+  // ── Macro signals grid ────────────────────────────────────────────────────
+  const macroEl = document.getElementById('macro-signals-grid');
+  if (macroEl && fg.components) {
+    const c = fg.components;
+    const macroItems = [
+      { label: 'Avg RSI',        value: c.avg_rsi != null ? c.avg_rsi.toFixed(1) : '—',
+        note: c.avg_rsi < 35 ? 'Oversold 😱' : c.avg_rsi > 65 ? 'Overbought 🤑' : 'Neutral',
+        color: c.avg_rsi < 35 ? '#ef4444' : c.avg_rsi > 65 ? '#34d399' : '#64748b' },
+      { label: 'Above 50MA',     value: c.pct_above_ma != null ? c.pct_above_ma.toFixed(0) + '%' : '—',
+        note: c.pct_above_ma < 30 ? 'Mostly bear' : c.pct_above_ma > 70 ? 'Mostly bull' : 'Mixed',
+        color: c.pct_above_ma < 30 ? '#ef4444' : c.pct_above_ma > 70 ? '#34d399' : '#64748b' },
+      { label: 'Above VWAP',     value: c.pct_above_vwap != null ? c.pct_above_vwap.toFixed(0) + '%' : '—',
+        note: c.pct_above_vwap < 30 ? 'Below VWAP' : c.pct_above_vwap > 70 ? 'Above VWAP' : 'Split',
+        color: c.pct_above_vwap < 30 ? '#ef4444' : c.pct_above_vwap > 70 ? '#34d399' : '#64748b' },
+      { label: 'BTC Vol',        value: c.btc_vol_pct != null ? c.btc_vol_pct.toFixed(2) + '%' : '—',
+        note: c.btc_vol_pct > 3 ? 'High — fear' : c.btc_vol_pct < 1 ? 'Low — calm' : 'Normal',
+        color: c.btc_vol_pct > 3 ? '#ef4444' : c.btc_vol_pct < 1 ? '#34d399' : '#64748b' },
+      { label: 'Range Position', value: c.avg_rng_pos != null ? (c.avg_rng_pos*100).toFixed(0) + '%' : '—',
+        note: c.avg_rng_pos < 0.3 ? 'Near bottom' : c.avg_rng_pos > 0.7 ? 'Near top' : 'Mid range',
+        color: c.avg_rng_pos < 0.3 ? '#ef4444' : c.avg_rng_pos > 0.7 ? '#34d399' : '#64748b' },
+      { label: 'F/G Score Pts',
+        value: c.rsi_score != null ? `RSI:${c.rsi_score.toFixed(0)} MA:${c.ma_score.toFixed(0)} VWAP:${c.vwap_score.toFixed(0)}` : '—',
+        note: `Vol:${(c.vol_score||0).toFixed(0)} Mom:${(c.mom_score||0).toFixed(0)}`,
+        color: '#64748b' },
+    ];
+    macroEl.innerHTML = macroItems.map(m => `
+      <div class="bg-slate-900 rounded-lg px-3 py-2">
+        <p class="text-slate-500 text-xs mb-0.5">${m.label}</p>
+        <p class="font-bold text-sm font-mono" style="color:${m.color}">${m.value}</p>
+        <p class="text-slate-600 text-xs">${m.note}</p>
+      </div>`).join('');
+  }
+
+  // ── Black Swan banner ─────────────────────────────────────────────────────
+  const banner   = document.getElementById('swan-banner');
+  const swanIcon = document.getElementById('swan-icon');
+  const swanTitle= document.getElementById('swan-title');
+  const swanEvts = document.getElementById('swan-events');
+  const swanAct  = document.getElementById('swan-action');
+
+  const level = swan.level || 'normal';
+
+  if (!banner) return;
+
+  if (level === 'normal') {
+    banner.classList.add('hidden');
+    return;
+  }
+
+  banner.classList.remove('hidden');
+
+  if (level === 'critical') {
+    banner.style.background    = '#1a0808';
+    banner.style.borderColor   = '#7f1d1d';
+    swanIcon.textContent       = '🚨';
+    swanTitle.style.color      = '#f87171';
+    swanTitle.textContent      = '🚨 BLACK SWAN — CRITICAL';
+  } else {
+    banner.style.background    = '#1a1000';
+    banner.style.borderColor   = '#78350f';
+    swanIcon.textContent       = '⚠️';
+    swanTitle.style.color      = '#fbbf24';
+    swanTitle.textContent      = '⚠️ BLACK SWAN — WARNING';
+  }
+
+  const eventTypeLabels = {
+    flash_crash:    e => `💥 Flash crash: ${e.asset} ${(e.move_pct||0).toFixed(1)}%`,
+    price_shock:    e => `📉 Price shock: ${e.asset} ${(e.move_pct||0).toFixed(1)}%`,
+    cascade_crash:  e => `🌊 Cascade crash: ${(e.pairs||[]).join(', ')} avg ${(e.avg_move||0).toFixed(1)}%`,
+    cascade_pump:   e => `🚀 Cascade pump: ${(e.pairs||[]).join(', ')} avg +${(e.avg_move||0).toFixed(1)}%`,
+    feed_anomaly:   e => `📡 Feed anomaly: ${e.asset} — ${e.detail}`,
+    extreme_fear:   e => `😱 Extreme Fear — score ${e.score}/100`,
+    fear_warning:   e => `😟 Fear warning — score ${e.score}/100`,
+    extreme_greed:  e => `🤑 Extreme Greed — score ${e.score}/100 — risk of reversal`,
+    macro_extreme:  e => `🌋 Macro extreme vol ${(e.vol||0).toFixed(1)}%`,
+  };
+
+  const events = swan.events || [];
+  if (swanEvts) {
+    swanEvts.innerHTML = events.map(e => {
+      const fn = eventTypeLabels[e.type];
+      return `<p>${fn ? fn(e) : JSON.stringify(e)}</p>`;
+    }).join('') || '<p>Unknown event</p>';
+  }
+
+  if (swanAct) swanAct.textContent = swan.action || '';
+}
+
 async function refresh() {
   const spinner = document.getElementById('refresh-spinner');
   spinner.style.display = 'inline-block';
@@ -993,6 +1198,9 @@ async function refresh() {
 
     // Trades
     renderTrades(data.recent_trades || []);
+
+    // Fear/Greed + Black Swan
+    renderSentiment(data.sentiment || {});
 
     // Timestamp
     document.getElementById('last-updated').textContent = new Date().toLocaleTimeString();

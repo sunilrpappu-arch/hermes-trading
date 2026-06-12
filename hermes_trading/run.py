@@ -15,6 +15,7 @@ import argparse
 import asyncio
 import shutil
 import yaml
+from datetime import datetime, timezone
 from pathlib import Path
 import os
 
@@ -203,7 +204,57 @@ async def run_all(universe: list[str], total_capital: float, force_pairs: list[s
         print(f"[coordinator] active pairs: {active_pairs} | regime: {regime_info.get('label','?')}", flush=True)
 
     async def coordinator_loop():
-        last_scan = 0.0
+        import json as _json
+        from hermes_trading import black_swan as bs
+
+        last_scan    = 0.0
+        _prev_prices: dict[str, float] = {}   # {asset: price} from previous tick
+        _bs_alerted  = False                   # avoid spam-alerting on sustained critical
+
+        def _read_heartbeats_dict() -> list[dict]:
+            """Quick read of all fresh heartbeat files → list of dicts for sentiment calc."""
+            import time as _time
+            now   = _time.time()
+            items = []
+            for hf in STATE_DIR.glob("heartbeat_*.json"):
+                try:
+                    d   = _json.loads(hf.read_text())
+                    ts  = d.get("timestamp")
+                    if ts:
+                        age = now - datetime.fromisoformat(
+                            ts.replace("Z", "+00:00")).timestamp()
+                        if age > 600:   # >10 min stale → skip
+                            continue
+                    # Build heartbeat dict expected by black_swan.py
+                    hb = {
+                        "asset":      d.get("asset", ""),
+                        "price":      d.get("price", 0),
+                        "rsi_15m":    d.get("rsi_15m"),
+                        "trend":      d.get("trend"),
+                        "rng_pos":    d.get("rng_pos"),
+                        "vwap_above": d.get("vwap_above"),
+                    }
+                    items.append(hb)
+                except Exception:
+                    pass
+            return items
+
+        def _write_sentiment(fg: dict, swan: dict):
+            sf = STATE_DIR / "sentiment.json"
+            try:
+                sf.write_text(_json.dumps({
+                    "fear_greed": fg,
+                    "black_swan": {
+                        "level":   swan["level"],
+                        "events":  swan["events"],
+                        "action":  swan["action"],
+                        "all_stop": swan["all_stop"],
+                    },
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }))
+            except Exception:
+                pass
+
         while True:
             now = asyncio.get_event_loop().time()
 
@@ -224,6 +275,56 @@ async def run_all(universe: list[str], total_capital: float, force_pairs: list[s
                                 queues[pair].put_nowait(data)
                             except asyncio.QueueFull:
                                 pass
+
+                    # ── Fear/Greed + Black Swan ──────────────────────────────
+                    try:
+                        heartbeats = _read_heartbeats_dict()
+                        btc_vol    = regime_info.get("vol", None)
+                        fg_score   = bs.fear_greed_score(heartbeats, btc_vol)
+
+                        # Build prev_prices for flash crash detection
+                        swan = bs.check(
+                            heartbeats  = heartbeats,
+                            regime_info = regime_info,
+                            prev_prices = _prev_prices,
+                            fg_score    = fg_score,
+                        )
+
+                        # Update prev_prices for next tick
+                        for pair, md in market_data.items():
+                            asset = pair.split("/")[0]
+                            if md.get("price"):
+                                _prev_prices[asset] = md["price"]
+                                _prev_prices[pair]  = md["price"]
+
+                        _write_sentiment(fg_score, swan)
+
+                        score_lbl = f"{fg_score['emoji']} {fg_score['label']} {fg_score['score']}/100"
+                        print(f"[sentinel] {score_lbl} | {swan['level'].upper()}: {swan['action']}", flush=True)
+
+                        # Trigger all_stop on critical events
+                        if swan["all_stop"] and not _bs_alerted:
+                            controls_file = STATE_DIR / "controls.json"
+                            try:
+                                ctrl = _json.loads(controls_file.read_text()) if controls_file.exists() else {}
+                            except Exception:
+                                ctrl = {}
+                            if not ctrl.get("all_stop"):
+                                ctrl["all_stop"] = True
+                                controls_file.write_text(_json.dumps(ctrl, indent=2))
+                                print(f"[sentinel] 🚨 CRITICAL — all_stop set", flush=True)
+                                try:
+                                    from hermes_trading.notify import _send_telegram
+                                    _send_telegram(swan["message"])
+                                except Exception:
+                                    pass
+                            _bs_alerted = True
+                        elif not swan["all_stop"]:
+                            _bs_alerted = False   # reset once conditions normalise
+
+                    except Exception as e:
+                        print(f"[sentinel] sentiment error: {e}", flush=True)
+
                 except Exception as e:
                     print(f"[coordinator] market data fetch failed: {e}", flush=True)
 
