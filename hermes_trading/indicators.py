@@ -427,6 +427,123 @@ def range_position(price: float, range_high: float, range_low: float) -> float:
     return max(0.0, min(1.0, (price - range_low) / (range_high - range_low)))
 
 
+def candlestick_patterns(candles: list[dict]) -> dict:
+    """
+    Detect key candlestick patterns on the most recent 1-2 candles.
+
+    Patterns detected:
+      hammer          — small body near top, lower wick ≥ 2× body (bullish reversal)
+      shooting_star   — small body near bottom, upper wick ≥ 2× body (bearish reversal)
+      bullish_engulf  — current bullish body fully engulfs prior bearish body (bullish momentum)
+      bearish_engulf  — current bearish body fully engulfs prior bullish body (bearish momentum)
+      bull_marubozu   — large bullish body, wicks < 15% of body (strong bull momentum)
+      bear_marubozu   — large bearish body, wicks < 15% of body (strong bear momentum)
+      doji            — body < 10% of candle range (indecision — confirms reversal at extremes)
+
+    Returns dict with bool for each pattern, plus summary lists:
+      "bullish_signals": list of bullish pattern names found
+      "bearish_signals": list of bearish pattern names found
+    """
+    result = {
+        "hammer":         False,
+        "shooting_star":  False,
+        "bullish_engulf": False,
+        "bearish_engulf": False,
+        "bull_marubozu":  False,
+        "bear_marubozu":  False,
+        "doji":           False,
+        "bullish_signals": [],
+        "bearish_signals": [],
+    }
+    if len(candles) < 2:
+        return result
+
+    cur  = candles[-1]
+    prev = candles[-2]
+
+    c_open  = cur["open"]
+    c_close = cur["close"]
+    c_high  = cur["high"]
+    c_low   = cur["low"]
+    c_range = c_high - c_low
+
+    if c_range < 1e-12:
+        return result
+
+    c_body        = abs(c_close - c_open)
+    c_body_top    = max(c_open, c_close)
+    c_body_bot    = min(c_open, c_close)
+    c_upper_wick  = c_high - c_body_top
+    c_lower_wick  = c_body_bot - c_low
+    c_is_bull     = c_close > c_open
+    c_is_bear     = c_close < c_open
+
+    p_open  = prev["open"]
+    p_close = prev["close"]
+    p_body_top = max(p_open, p_close)
+    p_body_bot = min(p_open, p_close)
+    p_is_bull  = p_close > p_open
+    p_is_bear  = p_close < p_open
+
+    # --- Doji: body is tiny relative to candle range ---
+    if c_body < 0.10 * c_range:
+        result["doji"] = True
+        # Doji is neutral — counted as both signals at extremes
+        result["bullish_signals"].append("doji")
+        result["bearish_signals"].append("doji")
+
+    # --- Hammer: small body at top of candle, big lower wick ---
+    # Lower wick ≥ 2× body, upper wick ≤ 30% of body, body in upper 40% of range
+    if (c_body > 0
+            and c_lower_wick >= 2.0 * c_body
+            and c_upper_wick <= 0.3 * c_body
+            and c_body_bot >= c_low + 0.55 * c_range):
+        result["hammer"] = True
+        result["bullish_signals"].append("hammer")
+
+    # --- Shooting star: small body at bottom of candle, big upper wick ---
+    if (c_body > 0
+            and c_upper_wick >= 2.0 * c_body
+            and c_lower_wick <= 0.3 * c_body
+            and c_body_top <= c_low + 0.45 * c_range):
+        result["shooting_star"] = True
+        result["bearish_signals"].append("shooting_star")
+
+    # --- Bullish engulfing: bull candle body fully covers prior bear body ---
+    if (c_is_bull and p_is_bear
+            and c_body_bot <= p_body_bot
+            and c_body_top >= p_body_top
+            and c_body > 0 and p_body_top > p_body_bot):
+        result["bullish_engulf"] = True
+        result["bullish_signals"].append("bull_engulf")
+
+    # --- Bearish engulfing: bear candle body fully covers prior bull body ---
+    if (c_is_bear and p_is_bull
+            and c_body_bot <= p_body_bot
+            and c_body_top >= p_body_top
+            and c_body > 0 and p_body_top > p_body_bot):
+        result["bearish_engulf"] = True
+        result["bearish_signals"].append("bear_engulf")
+
+    # --- Bull Marubozu: big bullish body, wicks < 15% of body each ---
+    if (c_is_bull
+            and c_body >= 0.7 * c_range           # body dominates the candle
+            and c_upper_wick <= 0.15 * c_body
+            and c_lower_wick <= 0.15 * c_body):
+        result["bull_marubozu"] = True
+        result["bullish_signals"].append("bull_marubozu")
+
+    # --- Bear Marubozu: big bearish body, wicks < 15% of body each ---
+    if (c_is_bear
+            and c_body >= 0.7 * c_range
+            and c_upper_wick <= 0.15 * c_body
+            and c_lower_wick <= 0.15 * c_body):
+        result["bear_marubozu"] = True
+        result["bearish_signals"].append("bear_marubozu")
+
+    return result
+
+
 def breakout_detector(
     candles: list[dict],
     lookback: int = 20,

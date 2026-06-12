@@ -23,7 +23,7 @@ from hermes_trading.adapters.candles import fetch as fetch_candles, closes as ge
 from hermes_trading.indicators import (
     rsi as compute_rsi, sma, rsi_divergence,
     liquidity_grab as detect_liquidity_grab,
-    breakout_detector, macd as compute_macd,
+    breakout_detector, candlestick_patterns, macd as compute_macd,
 )
 
 # ---------------------------------------------------------------------------
@@ -329,6 +329,17 @@ async def _score_pair(pair: str, regime_vol: float) -> float:
         if m and (m["crossover_bullish"] or m["crossover_bearish"]):
             conviction += 5
             signals.append("macd_cross")
+    except Exception:
+        pass
+
+    # Candlestick pattern confirmation (+10)
+    # A strong candle pattern at a key level adds meaningful conviction
+    try:
+        cs = candlestick_patterns(candles_1h)
+        if cs["bullish_signals"] or cs["bearish_signals"]:
+            conviction += 10
+            cs_names = cs["bullish_signals"] + cs["bearish_signals"]
+            signals.append(f"cs({'|'.join(cs_names)})")
     except Exception:
         pass
 

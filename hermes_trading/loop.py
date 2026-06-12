@@ -31,6 +31,7 @@ from hermes_trading.indicators import (
     rsi_divergence,
     liquidity_grab as detect_liquidity_grab,
     breakout_detector,
+    candlestick_patterns,
     prev_day_levels,
     opening_range as compute_opening_range,
     swing_levels as compute_swing_levels,
@@ -200,7 +201,7 @@ async def fetch_with_retry(fn, *args, **kwargs):
 
 
 DEFAULT_STRATEGY = {
-    "version": "11",
+    "version": "12",
     # Bull regime: price above 50MA on 4H, ADX >= 20
     # Long bias — buy RSI dips. Short only on confirmed liquidity grabs.
     "bull": {
@@ -553,6 +554,14 @@ class TradingLoop:
                     "false_breakout": False, "false_breakdown": False,
                     "resistance": 0.0, "support": 0.0})
 
+        # Candlestick patterns on 15m (entry confirmation)
+        cs = (candlestick_patterns(candles_15m_raw)
+              if len(candles_15m_raw) >= 2
+              else {"hammer": False, "shooting_star": False,
+                    "bullish_engulf": False, "bearish_engulf": False,
+                    "bull_marubozu": False, "bear_marubozu": False,
+                    "doji": False, "bullish_signals": [], "bearish_signals": []})
+
         # RSI divergence on 15m (entry signal — separate from 1H MTF confluence)
         rsi_div_15m = (rsi_divergence(c15m)
                        if len(c15m) >= 54
@@ -750,78 +759,92 @@ class TradingLoop:
                 range_short_rsi = 70   # RSI must be genuinely overbought to short at range top
                 range_long_rsi  = 30   # RSI must be genuinely oversold  to long at range bottom
                 if rng_pos is not None and rng_high and rng_low and (rng_high - rng_low) > 0:
-                    # Range extreme short: only fire if RSI overbought AND not actively breaking out
-                    # (bull regime breakout = momentum move, don't fade it)
+                    # Range extreme short: RSI overbought + bearish candle + not breaking out
+                    cs_bear_confirms = bool(cs["bearish_signals"])   # shooting star, bear engulf, bear marubozu, doji
+                    cs_bull_blocks   = cs["bull_marubozu"]           # strong bull candle = don't short
                     if (rng_pos >= (1.0 - sw_entry_pct)
                             and rsi_15m > range_short_rsi
-                            and not bo["breakout"]):
-                        lq_note             = f"range_extreme_short({rng_pos:.0%} rsi={rsi_15m:.0f})"
+                            and not bo["breakout"]
+                            and not cs_bull_blocks):
+                        cs_note = f"+cs({','.join(cs['bearish_signals'])})" if cs_bear_confirms else ""
+                        lq_note             = f"range_extreme_short({rng_pos:.0%} rsi={rsi_15m:.0f}){cs_note}"
                         _, htf_reasons      = self._htf_signals_short(candles)
                         new_direction       = "short"
                         range_override_fired = True
-                    # Range extreme long: only fire if RSI oversold AND not actively breaking down
+
+                    # Range extreme long: RSI oversold + bullish candle + not breaking down
+                    cs_bull_confirms = bool(cs["bullish_signals"])   # hammer, bull engulf, bull marubozu, doji
+                    cs_bear_blocks   = cs["bear_marubozu"]           # strong bear candle = don't long
                     elif (rng_pos <= sw_entry_pct
                             and rsi_15m < range_long_rsi
-                            and not bo["breakdown"]):
-                        lq_note             = f"range_extreme_long({rng_pos:.0%} rsi={rsi_15m:.0f})"
+                            and not bo["breakdown"]
+                            and not cs_bear_blocks):
+                        cs_note = f"+cs({','.join(cs['bullish_signals'])})" if cs_bull_confirms else ""
+                        lq_note             = f"range_extreme_long({rng_pos:.0%} rsi={rsi_15m:.0f}){cs_note}"
                         _, htf_reasons      = self._htf_signals_long(candles)
                         new_direction       = "long"
                         range_override_fired = True
 
                 if not range_override_fired:
+                    # Candlestick conviction helpers (reused across regimes)
+                    cs_bull_ok = bool(cs["bullish_signals"]) and not cs["bear_marubozu"]
+                    cs_bear_ok = bool(cs["bearish_signals"]) and not cs["bull_marubozu"]
+                    cs_bull_str = f"+cs({','.join(cs['bullish_signals'])})" if cs["bullish_signals"] else ""
+                    cs_bear_str = f"+cs({','.join(cs['bearish_signals'])})" if cs["bearish_signals"] else ""
+
                     if pair_regime == "bull":
                         bull_long_thr = bull_cfg.get("long_threshold", 35)
-                        # 1. Breakout long — price breaks above resistance in uptrend (momentum)
-                        if bo["breakout"] and trend == "uptrend":
-                            lq_note        = f"breakout(res={bo['resistance']:.6g})"
+                        # 1. Breakout long — confirmed by bull marubozu or engulfing
+                        if bo["breakout"] and trend == "uptrend" and not cs["bear_marubozu"]:
+                            lq_note        = f"breakout(res={bo['resistance']:.6g}){cs_bull_str}"
                             _, htf_reasons = self._htf_signals_long(candles)
                             new_direction  = "long"
-                        # 2. RSI dip buy — classic bull pullback entry
-                        elif rsi_15m < bull_long_thr and trend == "uptrend":
+                        # 2. RSI dip buy — require bullish candle confirmation (hammer/engulf)
+                        elif (rsi_15m < bull_long_thr and trend == "uptrend"
+                                and (cs_bull_ok or lq_bull)):
+                            lq_note        = cs_bull_str
                             _, htf_reasons = self._htf_signals_long(candles)
                             new_direction  = "long"
-                        # 3. Short signals — only fire when price is NOT breaking out
+                        # 3. Short signals — only fire when not breaking out + bearish candle
                         elif not bo["breakout"]:
-                            if bo["false_breakout"]:
-                                # Failed breakout: spike above resistance rejected → short
-                                lq_note        = f"false_breakout(res={bo['resistance']:.6g})"
+                            if bo["false_breakout"] and cs_bear_ok:
+                                lq_note        = f"false_breakout(res={bo['resistance']:.6g}){cs_bear_str}"
                                 _, htf_reasons = self._htf_signals_short(candles)
                                 new_direction  = "short"
-                            elif rsi_div_15m["bearish"]:
-                                # Bearish RSI divergence (higher high price, lower high RSI)
-                                lq_note        = "rsi_div_bearish_15m"
+                            elif rsi_div_15m["bearish"] and cs_bear_ok:
+                                lq_note        = f"rsi_div_bearish_15m{cs_bear_str}"
                                 _, htf_reasons = self._htf_signals_short(candles)
                                 new_direction  = "short"
-                            elif bull_cfg.get("short_on_lq_only", True) and lq_bear:
-                                lq_note        = f"lq_grab_bear(wick={lq['wick_pct']:.3%})"
+                            elif bull_cfg.get("short_on_lq_only", True) and lq_bear and cs_bear_ok:
+                                lq_note        = f"lq_grab_bear(wick={lq['wick_pct']:.3%}){cs_bear_str}"
                                 _, htf_reasons = self._htf_signals_short(candles)
                                 new_direction  = "short"
 
                     elif pair_regime == "bear":
                         bear_short_thr = bear_cfg.get("short_threshold", 60)
-                        # 1. Breakdown short — price breaks below support in downtrend (momentum)
-                        if bo["breakdown"] and trend == "downtrend":
-                            lq_note        = f"breakdown(sup={bo['support']:.6g})"
+                        # 1. Breakdown short — confirmed by bear marubozu or engulfing
+                        if bo["breakdown"] and trend == "downtrend" and not cs["bull_marubozu"]:
+                            lq_note        = f"breakdown(sup={bo['support']:.6g}){cs_bear_str}"
                             _, htf_reasons = self._htf_signals_short(candles)
                             new_direction  = "short"
-                        # 2. RSI bounce short — classic bear rally entry
-                        elif rsi_15m > bear_short_thr and trend == "downtrend":
+                        # 2. RSI bounce short — require bearish candle confirmation
+                        elif (rsi_15m > bear_short_thr and trend == "downtrend"
+                                and (cs_bear_ok or lq_bear)):
+                            lq_note        = cs_bear_str
                             _, htf_reasons = self._htf_signals_short(candles)
                             new_direction  = "short"
-                        # 3. Long signals — only fire when price is NOT breaking down
+                        # 3. Long signals — only fire when not breaking down + bullish candle
                         elif not bo["breakdown"]:
-                            if bo["false_breakdown"]:
-                                # Failed breakdown: spike below support rejected → long
-                                lq_note        = f"false_breakdown(sup={bo['support']:.6g})"
+                            if bo["false_breakdown"] and cs_bull_ok:
+                                lq_note        = f"false_breakdown(sup={bo['support']:.6g}){cs_bull_str}"
                                 _, htf_reasons = self._htf_signals_long(candles)
                                 new_direction  = "long"
-                            elif rsi_div_15m["bullish"]:
-                                # Bullish RSI divergence (lower low price, higher low RSI)
-                                lq_note        = "rsi_div_bullish_15m"
+                            elif rsi_div_15m["bullish"] and cs_bull_ok:
+                                lq_note        = f"rsi_div_bullish_15m{cs_bull_str}"
                                 _, htf_reasons = self._htf_signals_long(candles)
                                 new_direction  = "long"
-                            elif bear_cfg.get("long_on_lq_only", True) and lq_bull:
-                                lq_note        = f"lq_grab_bull(wick={lq['wick_pct']:.3%})"
+                            elif bear_cfg.get("long_on_lq_only", True) and lq_bull and cs_bull_ok:
+                                lq_note        = f"lq_grab_bull(wick={lq['wick_pct']:.3%}){cs_bull_str}"
                                 _, htf_reasons = self._htf_signals_long(candles)
                                 new_direction  = "long"
 
@@ -829,29 +852,31 @@ class TradingLoop:
                         if rng_pos is not None and rng_high and rng_low:
                             rng_total = rng_high - rng_low
                             if rng_total > 0:
-                                if rng_pos <= sw_entry_pct:
-                                    lq_note       = f"range_bottom({rng_pos:.1%})"
+                                # Range bottom long — need bullish candle, no strong bear momentum
+                                if rng_pos <= sw_entry_pct and (cs_bull_ok or lq_bull):
+                                    lq_note        = f"range_bottom({rng_pos:.1%}){cs_bull_str}"
                                     _, htf_reasons = self._htf_signals_long(candles)
                                     new_direction  = "long"
-                                elif rng_pos >= (1.0 - sw_entry_pct):
-                                    lq_note       = f"range_top({rng_pos:.1%})"
+                                # Range top short — need bearish candle, no strong bull momentum
+                                elif rng_pos >= (1.0 - sw_entry_pct) and (cs_bear_ok or lq_bear):
+                                    lq_note        = f"range_top({rng_pos:.1%}){cs_bear_str}"
                                     _, htf_reasons = self._htf_signals_short(candles)
                                     new_direction  = "short"
 
                     else:
-                        # neutral / warming up fallback — add divergence signals
-                        if rsi_div_15m["bullish"] or (rsi_15m < 30 and (trend == "uptrend" or lq_bull)):
+                        # neutral / warming up fallback
+                        if (rsi_div_15m["bullish"] or (rsi_15m < 30 and (trend == "uptrend" or lq_bull))) and cs_bull_ok:
                             if rsi_div_15m["bullish"]:
-                                lq_note = "rsi_div_bullish_15m"
+                                lq_note = f"rsi_div_bullish_15m{cs_bull_str}"
                             elif lq_bull and trend != "uptrend":
-                                lq_note = f"lq_grab(wick={lq['wick_pct']:.3%})"
+                                lq_note = f"lq_grab(wick={lq['wick_pct']:.3%}){cs_bull_str}"
                             _, htf_reasons = self._htf_signals_long(candles)
                             new_direction  = "long"
-                        elif rsi_div_15m["bearish"] or (rsi_15m > 70 and (trend == "downtrend" or lq_bear)):
+                        elif (rsi_div_15m["bearish"] or (rsi_15m > 70 and (trend == "downtrend" or lq_bear))) and cs_bear_ok:
                             if rsi_div_15m["bearish"]:
-                                lq_note = "rsi_div_bearish_15m"
+                                lq_note = f"rsi_div_bearish_15m{cs_bear_str}"
                             elif lq_bear and trend != "downtrend":
-                                lq_note = f"lq_grab(wick={lq['wick_pct']:.3%})"
+                                lq_note = f"lq_grab(wick={lq['wick_pct']:.3%}){cs_bear_str}"
                             _, htf_reasons = self._htf_signals_short(candles)
                             new_direction  = "short"
 
@@ -915,6 +940,8 @@ class TradingLoop:
             "bo_false_breakdown": bo["false_breakdown"],
             "rsi_div_bull":  rsi_div_15m["bullish"],
             "rsi_div_bear":  rsi_div_15m["bearish"],
+            "cs_bullish":    cs["bullish_signals"],
+            "cs_bearish":    cs["bearish_signals"],
             "all_stop":           all_stop,
             "entry_leverage":     entry_leverage,
             "regime_params":      regime_params,
