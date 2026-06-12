@@ -187,13 +187,71 @@ async def api_state():
         "drawdown":      drawdown,
         "cum_pnl":       cum_pnl,
         "heartbeats":    heartbeats,
-        "recent_trades": list(reversed(trades[-20:])),  # last 20, newest first
+        "recent_trades": list(reversed(trades)),  # all trades, newest first — paginated client-side
     })
 
 
 @app.get("/api/trades")
 async def api_trades():
     return JSONResponse({"trades": list(reversed(_read_trades()))})
+
+
+@app.post("/api/reset-stats")
+async def api_reset_stats():
+    """
+    Archive and wipe all historical state so the dashboard starts fresh.
+    Safe in paper mode. In live mode, open positions are preserved.
+    """
+    import time as _time
+    archived = []
+    errors   = []
+
+    # 1. Archive + clear trades
+    tf = STATE_DIR / "trades.jsonl"
+    if tf.exists() and tf.stat().st_size > 0:
+        ts  = int(_time.time())
+        dst = STATE_DIR / "history" / f"trades_archive_{ts}.jsonl"
+        (STATE_DIR / "history").mkdir(parents=True, exist_ok=True)
+        try:
+            dst.write_bytes(tf.read_bytes())
+            archived.append(str(dst.name))
+        except Exception as e:
+            errors.append(f"archive: {e}")
+    try:
+        tf.write_text("")
+        archived.append("trades.jsonl cleared")
+    except Exception as e:
+        errors.append(f"clear trades: {e}")
+
+    # 2. Clear drawdown
+    dd = STATE_DIR / "drawdown.json"
+    try:
+        dd.unlink(missing_ok=True)
+        archived.append("drawdown.json deleted")
+    except Exception as e:
+        errors.append(f"drawdown: {e}")
+
+    # 3. Clear hypotheses
+    hyp = STATE_DIR / "hypotheses.jsonl"
+    try:
+        hyp.write_text("")
+        archived.append("hypotheses.jsonl cleared")
+    except Exception as e:
+        errors.append(f"hypotheses: {e}")
+
+    # 4. Clear paper positions (skip in live mode to avoid losing track of open trades)
+    from hermes_trading.adapters.exchange import is_live
+    if not is_live():
+        for pf in STATE_DIR.glob("position_*.json"):
+            try:
+                pf.unlink()
+                archived.append(f"{pf.name} deleted")
+            except Exception as e:
+                errors.append(f"{pf.name}: {e}")
+
+    status = "ok" if not errors else "partial"
+    print(f"[reset-stats] {status}: {', '.join(archived)}", flush=True)
+    return JSONResponse({"status": status, "archived": archived, "errors": errors})
 
 
 @app.get("/api/pairs")
@@ -709,8 +767,8 @@ let _tradesPage  = 0;
 const TRADES_PER_PAGE = 20;
 
 function renderTrades(trades) {
-  // newest first
-  _allTrades  = [...trades].reverse();
+  // already newest-first from server — no reverse needed
+  _allTrades  = [...trades];
   _tradesPage = 0;
   _renderTradesPage();
 }
@@ -1011,6 +1069,23 @@ async function doAllStop() {
 async function doResume() {
   const res = await ctrlPost({action: 'resume'});
   if (res) { showToast('▶ Trading resumed'); refresh(); }
+}
+
+async function doResetStats() {
+  const input = prompt('⚠️ This will wipe all trade history, win rate, PnL and drawdown.\\n\\nTrades are archived first but the dashboard resets to zero.\\n\\nType RESET to confirm:');
+  if (input !== 'RESET') { alert('Cancelled — you must type RESET exactly.'); return; }
+  try {
+    const r = await fetch('/api/reset-stats', { method: 'POST' });
+    const d = await r.json();
+    if (d.status === 'ok' || d.status === 'partial') {
+      alert('✅ Stats reset!\\n' + d.archived.join('\\n') + (d.errors.length ? '\\n⚠️ ' + d.errors.join(', ') : ''));
+      await refreshData();  // reload dashboard immediately
+    } else {
+      alert('❌ Reset failed: ' + JSON.stringify(d));
+    }
+  } catch(e) {
+    alert('❌ Error: ' + e);
+  }
 }
 
 async function doTestTelegram() {
