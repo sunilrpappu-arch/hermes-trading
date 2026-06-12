@@ -503,7 +503,16 @@ _HTML = r"""<!DOCTYPE html>
 
 <!-- Recent trades -->
 <div class="card mb-6">
-  <p class="text-slate-400 text-xs font-semibold mb-3">RECENT TRADES</p>
+  <div class="flex items-center justify-between mb-3">
+    <p class="text-slate-400 text-xs font-semibold">RECENT TRADES</p>
+    <div class="flex items-center gap-3">
+      <span id="trades-page-info" class="text-slate-500 text-xs"></span>
+      <button onclick="tradesPagePrev()" id="btn-trades-prev"
+        class="px-2 py-1 rounded text-xs bg-slate-800 border border-slate-700 text-slate-400 hover:text-slate-200 disabled:opacity-30">◀ Prev</button>
+      <button onclick="tradesPageNext()" id="btn-trades-next"
+        class="px-2 py-1 rounded text-xs bg-slate-800 border border-slate-700 text-slate-400 hover:text-slate-200 disabled:opacity-30">Next ▶</button>
+    </div>
+  </div>
   <div class="overflow-x-auto">
     <table id="trades-table">
       <thead>
@@ -671,10 +680,40 @@ function renderPairs(heartbeats) {
   }).join('');
 }
 
+// Trades pagination state
+let _allTrades   = [];
+let _tradesPage  = 0;
+const TRADES_PER_PAGE = 20;
+
 function renderTrades(trades) {
-  const tbody = document.getElementById('trades-body');
-  if (!trades.length) return;
-  tbody.innerHTML = trades.map(t => {
+  // newest first
+  _allTrades  = [...trades].reverse();
+  _tradesPage = 0;
+  _renderTradesPage();
+}
+
+function _renderTradesPage() {
+  const tbody    = document.getElementById('trades-body');
+  const info     = document.getElementById('trades-page-info');
+  const btnPrev  = document.getElementById('btn-trades-prev');
+  const btnNext  = document.getElementById('btn-trades-next');
+  const total    = _allTrades.length;
+  const pages    = Math.max(1, Math.ceil(total / TRADES_PER_PAGE));
+  const start    = _tradesPage * TRADES_PER_PAGE;
+  const slice    = _allTrades.slice(start, start + TRADES_PER_PAGE);
+
+  if (info)    info.textContent = total
+    ? `${start + 1}–${Math.min(start + TRADES_PER_PAGE, total)} of ${total} trades`
+    : '';
+  if (btnPrev) btnPrev.disabled = _tradesPage === 0;
+  if (btnNext) btnNext.disabled = _tradesPage >= pages - 1;
+
+  if (!total) {
+    tbody.innerHTML = '<tr><td colspan="12" class="text-center text-slate-500 py-8">No trades yet</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = slice.map(t => {
     const pct  = t.pnl_pct != null ? t.pnl_pct * 100 : null;
     const usd  = t.pnl_usdt != null ? t.pnl_usdt : (t.pnl_pct != null ? t.pnl_pct * (t.usdt_deployed || 10) : null);
     const dt   = t.exit_time ? new Date(t.exit_time * 1000).toLocaleString() : '—';
@@ -686,7 +725,7 @@ function renderTrades(trades) {
     const pnlUsd = usd != null
       ? `<span class="${pnlClass(usd)}">${fmtUSD(usd)}</span>` : '—';
     const reason = t.close_reason || '—';
-    const regime = t.regime_at_entry || '—';
+    const regime = t.pair_regime || t.regime_at_entry || '—';
     const ver    = t.strategy_version ? 'v' + t.strategy_version : '—';
     const capital = t.usdt_deployed != null ? '$' + parseFloat(t.usdt_deployed).toFixed(2) : '—';
     const qty     = t.qty != null && t.qty > 0
@@ -694,6 +733,7 @@ function renderTrades(trades) {
       : (t.usdt_deployed && t.entry_price
           ? (parseFloat(t.usdt_deployed) / parseFloat(t.entry_price)).toPrecision(4)
           : '—');
+    const signal = t.lq_grab ? `<span class="text-slate-500 text-xs">${t.lq_grab}</span>` : '';
     return `<tr>
       <td><a href="${tvUrl(t.asset||'')}" target="_blank" class="font-medium text-white hover:text-indigo-400 transition-colors">${(t.asset||'').replace('/USDT','')}/USDT ↗</a></td>
       <td>${dir}</td>
@@ -703,12 +743,20 @@ function renderTrades(trades) {
       <td class="text-slate-400 text-xs">${qty}</td>
       <td>${pnlPct}</td>
       <td>${pnlUsd}</td>
-      <td><span class="text-slate-400">${reason}</span></td>
+      <td><span class="text-slate-400">${reason}</span>${signal}</td>
       <td><span class="badge ${regimeClass(regime)} text-xs">${regime}</span></td>
       <td class="text-slate-500">${ver}</td>
       <td class="text-slate-500 text-xs">${dt}</td>
     </tr>`;
   }).join('');
+}
+
+function tradesPagePrev() {
+  if (_tradesPage > 0) { _tradesPage--; _renderTradesPage(); }
+}
+function tradesPageNext() {
+  const pages = Math.ceil(_allTrades.length / TRADES_PER_PAGE);
+  if (_tradesPage < pages - 1) { _tradesPage++; _renderTradesPage(); }
 }
 
 function renderPnlChart(points) {
