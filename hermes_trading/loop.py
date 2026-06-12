@@ -332,6 +332,40 @@ def _run_reflection(trades: list[dict], stats: dict):
         print(f"[reflection] failed to log hypothesis: {e}", flush=True)
 
 
+async def _run_self_improvement(all_trades: list[dict], strategy_keys: list[str]):
+    """
+    Run the full self-improvement cycle asynchronously so it doesn't block trading.
+    Analyses trade history, backtests proposed changes, and updates strategy.yaml.
+    """
+    try:
+        from hermes_trading.self_improve import improve, format_improvement_message
+        strategy = load_strategy()
+
+        # Collect active pairs from heartbeat files
+        active_pairs = []
+        for hb_file in STATE_DIR.glob("heartbeat_*.json"):
+            try:
+                hb = json.loads(hb_file.read_text())
+                if hb.get("asset"):
+                    active_pairs.append(hb["asset"])
+            except Exception:
+                pass
+        if not active_pairs:
+            active_pairs = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
+
+        print(f"[self_improve] Starting improvement cycle — {len(all_trades)} trades, "
+              f"pairs: {active_pairs}", flush=True)
+
+        summary = await improve(all_trades, strategy, active_pairs)
+
+        # Send Telegram notification about what changed
+        msg = format_improvement_message(summary)
+        send_reflection_notification(msg)
+
+    except Exception as e:
+        print(f"[self_improve] Cycle failed: {e}", flush=True)
+
+
 def load_strategy() -> dict:
     if not STRATEGY_FILE.exists():
         STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -765,6 +799,10 @@ class TradingLoop:
                 reflection_every = 5
                 if len(all_trades) % reflection_every == 0:
                     _run_reflection(all_trades, stats)
+                    # Self-improvement: analyse, backtest, maybe update strategy.yaml
+                    asyncio.create_task(
+                        _run_self_improvement(all_trades, list(strategy.keys()))
+                    )
 
                 print(f"  ← CLOSE {pos_direction.upper()} {self.asset} @ {current_price:.4f} "
                       f"pnl={pnl_pct:+.3%} (lev={pos_leverage}x) [{close_reason}] "
