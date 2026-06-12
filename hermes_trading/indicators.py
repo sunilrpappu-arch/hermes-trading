@@ -427,6 +427,134 @@ def range_position(price: float, range_high: float, range_low: float) -> float:
     return max(0.0, min(1.0, (price - range_low) / (range_high - range_low)))
 
 
+def bollinger_bands(
+    closes: list[float],
+    period: int = 20,
+    std_dev: float = 2.0,
+) -> dict | None:
+    """
+    Bollinger Bands: middle SMA ± N standard deviations.
+    Returns None if insufficient data.
+    """
+    if len(closes) < period:
+        return None
+    recent   = closes[-period:]
+    middle   = sum(recent) / period
+    variance = sum((x - middle) ** 2 for x in recent) / period
+    std      = variance ** 0.5
+    upper    = middle + std_dev * std
+    lower    = middle - std_dev * std
+    bandwidth = (upper - lower) / middle if middle > 0 else 0.0
+    price    = closes[-1]
+    return {
+        "upper":          round(upper, 8),
+        "middle":         round(middle, 8),
+        "lower":          round(lower, 8),
+        "bandwidth":      round(bandwidth, 6),
+        "std":            round(std, 8),
+        "pct_b":          round((price - lower) / (upper - lower), 4) if upper > lower else 0.5,
+        # %B: 0 = at lower band, 1 = at upper band, >1 above, <0 below
+    }
+
+
+def bb_squeeze(
+    closes: list[float],
+    period: int = 20,
+    std_dev: float = 2.0,
+    squeeze_pct: float = 0.25,
+    lookback: int = 50,
+) -> dict:
+    """
+    Detect Bollinger Band squeeze and expansion.
+
+    Squeeze: bands are historically tight (low-vol consolidation).
+             A big directional move is building — don't enter yet.
+    Expanding: bandwidth widening after a squeeze — breakout is starting NOW.
+               This is the highest-conviction entry timing signal.
+
+    squeeze_pct: bandwidth below this percentile of recent history = squeeze (default 25th).
+
+    Returns:
+      {
+        "bb":             dict (upper/middle/lower/bandwidth/pct_b) | None
+        "squeeze":        bool  — currently in low-vol consolidation
+        "expanding":      bool  — bandwidth growing (breakout starting)
+        "was_squeezing":  bool  — was in squeeze recently (expansion after squeeze = best signal)
+        "expansion_dir":  "up" | "down" | None
+        "price_above_mid": bool
+        "at_upper_band":  bool  — price ≥ upper BB (overbought / breakout)
+        "at_lower_band":  bool  — price ≤ lower BB (oversold / breakdown)
+      }
+    """
+    empty = {
+        "bb": None, "squeeze": False, "expanding": False,
+        "was_squeezing": False, "expansion_dir": None,
+        "price_above_mid": False, "at_upper_band": False, "at_lower_band": False,
+    }
+    min_len = period + lookback
+    if len(closes) < min_len:
+        return empty
+
+    # Rolling bandwidth history over lookback window
+    bw_history = []
+    for i in range(lookback, 0, -1):
+        window = closes[-(period + i):len(closes) - i]
+        if len(window) < period:
+            continue
+        mid = sum(window) / period
+        if mid <= 0:
+            continue
+        std = (sum((x - mid) ** 2 for x in window) / period) ** 0.5
+        bw_history.append((2 * std_dev * std) / mid)
+
+    if not bw_history:
+        return empty
+
+    current_bb = bollinger_bands(closes, period, std_dev)
+    if not current_bb:
+        return empty
+
+    current_bw    = current_bb["bandwidth"]
+    current_price = closes[-1]
+    sorted_bw     = sorted(bw_history)
+    thresh_idx    = max(0, int(len(sorted_bw) * squeeze_pct) - 1)
+    squeeze_thresh = sorted_bw[thresh_idx]
+
+    squeeze   = current_bw <= squeeze_thresh
+    above_mid = current_price > current_bb["middle"]
+
+    # Expansion: bandwidth has been increasing for the last 3 readings
+    expanding = False
+    if len(bw_history) >= 3:
+        expanding = all(bw_history[-i] > bw_history[-(i + 1)]
+                        for i in range(1, 3))
+
+    # Was squeezing: any of the last 5 readings were in squeeze territory
+    was_squeezing = any(bw <= squeeze_thresh for bw in bw_history[-5:])
+
+    # Expansion direction: use %B and price vs bands
+    expansion_dir = None
+    if expanding:
+        pct_b = current_bb["pct_b"]
+        if pct_b >= 0.8 or current_price >= current_bb["upper"]:
+            expansion_dir = "up"
+        elif pct_b <= 0.2 or current_price <= current_bb["lower"]:
+            expansion_dir = "down"
+        else:
+            expansion_dir = "up" if above_mid else "down"
+
+    return {
+        "bb":              current_bb,
+        "squeeze":         squeeze,
+        "expanding":       expanding,
+        "was_squeezing":   was_squeezing,
+        "expansion_dir":   expansion_dir,
+        "price_above_mid": above_mid,
+        "at_upper_band":   current_price >= current_bb["upper"],
+        "at_lower_band":   current_price <= current_bb["lower"],
+    }
+
+
 def candlestick_patterns(candles: list[dict]) -> dict:
     """
     Detect key candlestick patterns on the most recent 1-2 candles.

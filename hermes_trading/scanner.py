@@ -23,7 +23,8 @@ from hermes_trading.adapters.candles import fetch as fetch_candles, closes as ge
 from hermes_trading.indicators import (
     rsi as compute_rsi, sma, rsi_divergence,
     liquidity_grab as detect_liquidity_grab,
-    breakout_detector, candlestick_patterns, chart_patterns, macd as compute_macd,
+    breakout_detector, candlestick_patterns, chart_patterns,
+    bb_squeeze, macd as compute_macd,
 )
 
 # ---------------------------------------------------------------------------
@@ -339,6 +340,18 @@ async def _score_pair(pair: str, regime_vol: float) -> float:
             conviction += 10
             cs_names = cs["bullish_signals"] + cs["bearish_signals"]
             signals.append(f"cs({'|'.join(cs_names)})")
+    except Exception:
+        pass
+
+    # BB squeeze → expansion on 1H (+20 — highest conviction timing signal)
+    # Squeeze without expansion = skip (low conviction, no direction)
+    try:
+        bb = bb_squeeze(c)
+        if bb["expanding"] and bb["expansion_dir"]:
+            # Squeeze→expansion is the best breakout timing signal
+            bonus = 20 if bb["was_squeezing"] else 10
+            conviction += bonus
+            signals.append(f"bb_squeeze→{bb['expansion_dir']}" if bb["was_squeezing"] else f"bb_expand_{bb['expansion_dir']}")
     except Exception:
         pass
 
