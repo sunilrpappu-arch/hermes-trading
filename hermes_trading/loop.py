@@ -1179,6 +1179,7 @@ class TradingLoop:
             "trend":         trend,
             "ma50":          round(ma50, 6) if ma50 else None,
             "regime":        regime,
+            "pair_regime":   pair_regime,
             "is_sideways":   is_sideways,
             "rng_high":      round(rng_high, 6) if rng_high else None,
             "rng_low":       round(rng_low,  6) if rng_low  else None,
