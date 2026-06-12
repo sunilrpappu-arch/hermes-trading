@@ -518,11 +518,12 @@ _HTML = r"""<!DOCTYPE html>
       <thead>
         <tr>
           <th>Pair</th><th>Dir</th><th>Entry</th><th>Exit</th>
-          <th>Capital</th><th>Qty</th><th>PnL %</th><th>PnL $</th><th>Reason</th><th>Regime</th><th>Strategy</th><th>Time</th>
+          <th>R:R</th><th>SL</th><th>TP</th>
+          <th>PnL %</th><th>PnL $</th><th>Reason</th><th>Regime</th><th>Time</th>
         </tr>
       </thead>
       <tbody id="trades-body">
-        <tr><td colspan="10" class="text-center text-slate-500 py-8">No trades yet</td></tr>
+        <tr><td colspan="12" class="text-center text-slate-500 py-8">No trades yet</td></tr>
       </tbody>
     </table>
   </div>
@@ -593,12 +594,21 @@ function renderPairs(heartbeats) {
       const deployed = parseFloat(pos.usdt_deployed || 0);
       const pnlUsd   = pnlPct / 100 * deployed;
       const qty      = pos.qty > 0 ? parseFloat(pos.qty) : (entry > 0 ? deployed / entry : 0);
-      const slPct    = parseFloat(pos.stop_loss_pct   || hb.regime_params?.stop_loss_pct   || 1.8);
-      const tpPct    = parseFloat(pos.take_profit_pct || hb.regime_params?.take_profit_pct || 3.0);
-      const slPrice  = pos.direction === 'long' ? entry*(1-slPct/100) : entry*(1+slPct/100);
-      const tpPrice  = pos.direction === 'long' ? entry*(1+tpPct/100) : entry*(1-tpPct/100);
+      // Use structural levels when available, fall back to percentage-derived
+      const slPrice  = pos.sl_price ? parseFloat(pos.sl_price)
+                     : (pos.direction === 'long' ? entry*(1-(parseFloat(pos.stop_loss_pct||1.8)/100))
+                                                 : entry*(1+(parseFloat(pos.stop_loss_pct||1.8)/100)));
+      const tpPrice  = pos.tp_price ? parseFloat(pos.tp_price)
+                     : (pos.direction === 'long' ? entry*(1+(parseFloat(pos.take_profit_pct||3.0)/100))
+                                                 : entry*(1-(parseFloat(pos.take_profit_pct||3.0)/100)));
+      const slPct    = pos.sl_pct ? parseFloat(pos.sl_pct) : Math.abs((slPrice - entry)/entry*100);
+      const tpPct    = pos.tp_pct ? parseFloat(pos.tp_pct) : Math.abs((tpPrice - entry)/entry*100);
+      const rrRatio  = pos.rr_ratio ? parseFloat(pos.rr_ratio) : (tpPct / slPct);
+      const slMethod = pos.sl_method || null;
+      const tpMethod = pos.tp_method || null;
       const pnlColor = pnlPct >= 0 ? '#34d399' : '#f87171';
       const barPct   = Math.min(Math.abs(pnlPct) / tpPct * 100, 100).toFixed(1);
+      const rrColor  = rrRatio >= 2.0 ? '#34d399' : rrRatio >= 1.0 ? '#fbbf24' : '#f87171';
       const signals    = (pos.htf_signals || []).join(', ') || null;
       const regime     = pos.pair_regime || '—';
       // Use saved override if present, else fall back to position's entry leverage
@@ -626,8 +636,21 @@ function renderPairs(heartbeats) {
           <div><span class="text-slate-500">Capital </span><span class="text-slate-300">$${deployed.toFixed(2)}</span></div>
           <div><span class="text-slate-500">Qty </span><span class="text-slate-300">${qty.toPrecision(4)} ${asset.replace('/USDT','')}</span></div>
           <div><span class="text-slate-500">PnL$ </span><span class="font-mono" data-live-asset="${asset}" data-field="pnlusd" style="color:${pnlColor}">${pnlUsd>=0?'+':''}$${pnlUsd.toFixed(4)}</span></div>
-          <div><span class="text-slate-500">Stop </span><span class="text-red-400 font-mono">$${slPrice.toFixed(6)}</span></div>
-          <div><span class="text-slate-500">Target </span><span class="text-emerald-400 font-mono">$${tpPrice.toFixed(6)}</span></div>
+          <div>
+            <span class="text-slate-500">Stop </span>
+            <span class="text-red-400 font-mono">$${slPrice.toPrecision(6)}</span>
+            ${slMethod ? `<span class="text-slate-600 text-xs block">${slMethod}</span>` : ''}
+          </div>
+          <div>
+            <span class="text-slate-500">Target </span>
+            <span class="text-emerald-400 font-mono">$${tpPrice.toPrecision(6)}</span>
+            ${tpMethod ? `<span class="text-slate-600 text-xs block">${tpMethod}</span>` : ''}
+          </div>
+          <div>
+            <span class="text-slate-500">R:R </span>
+            <span class="font-bold font-mono" style="color:${rrColor}">${rrRatio.toFixed(2)}</span>
+            <span class="text-slate-600 text-xs"> (1:${rrRatio.toFixed(2)})</span>
+          </div>
           <div><span class="text-slate-500">RSI </span><span class="text-slate-300">${rsi}${rng?' · '+rng:''}</span></div>
         </div>
 
@@ -635,9 +658,9 @@ function renderPairs(heartbeats) {
           <div class="h-1.5 rounded-full transition-all duration-500" data-live-asset="${asset}" data-field="bar" style="width:${barPct}%;background:${pnlColor}"></div>
         </div>
         <div class="flex justify-between" style="font-size:0.65rem;color:#475569">
-          <span>SL -${parseFloat(slPct).toFixed(2)}%</span>
-          <span data-live-asset="${asset}" data-field="barlabel">${pnlPct>=0?'+':''}${pnlPct.toFixed(2)}% of ${tpPct}% target</span>
-          <span>TP +${tpPct}%</span>
+          <span class="text-red-500">SL -${slPct.toFixed(2)}%</span>
+          <span data-live-asset="${asset}" data-field="barlabel">${pnlPct>=0?'+':''}${pnlPct.toFixed(2)}% of ${tpPct.toFixed(2)}% target</span>
+          <span class="text-emerald-600">TP +${tpPct.toFixed(2)}%</span>
         </div>
         ${signals ? `<div class="mt-1 mb-2" style="font-size:0.65rem;color:#475569">MTF: ${signals}</div>` : ''}
 
@@ -726,26 +749,50 @@ function _renderTradesPage() {
       ? `<span class="${pnlClass(usd)}">${fmtUSD(usd)}</span>` : '—';
     const reason = t.close_reason || '—';
     const regime = t.pair_regime || t.regime_at_entry || '—';
-    const ver    = t.strategy_version ? 'v' + t.strategy_version : '—';
-    const capital = t.usdt_deployed != null ? '$' + parseFloat(t.usdt_deployed).toFixed(2) : '—';
-    const qty     = t.qty != null && t.qty > 0
-      ? parseFloat(t.qty).toPrecision(4)
-      : (t.usdt_deployed && t.entry_price
-          ? (parseFloat(t.usdt_deployed) / parseFloat(t.entry_price)).toPrecision(4)
-          : '—');
-    const signal = t.lq_grab ? `<span class="text-slate-500 text-xs">${t.lq_grab}</span>` : '';
+    const signal = t.lq_grab ? `<br><span class="text-slate-500 text-xs">${t.lq_grab}</span>` : '';
+
+    // R:R — colour-coded: ≥2 green, ≥1 yellow, <1 red
+    let rrCell = '—';
+    if (t.rr_ratio != null) {
+      const rr = parseFloat(t.rr_ratio);
+      const rrCls = rr >= 2.0 ? 'pnl-pos' : rr >= 1.0 ? 'text-yellow-400' : 'pnl-neg';
+      rrCell = `<span class="${rrCls} font-semibold">${rr.toFixed(2)}</span>`;
+    }
+
+    // SL cell: price + % + method
+    let slCell = '—';
+    if (t.sl_price != null) {
+      const slPct  = t.sl_pct    != null ? parseFloat(t.sl_pct).toFixed(2)  + '%' : '';
+      const slMeth = t.sl_method ? `<span class="text-slate-500 text-xs block">${t.sl_method}</span>` : '';
+      slCell = `<span class="text-red-400">${parseFloat(t.sl_price).toPrecision(6)}</span>
+                <span class="text-slate-500 text-xs"> −${slPct}</span>${slMeth}`;
+    } else if (t.stop_loss_pct != null) {
+      slCell = `<span class="text-slate-400 text-xs">−${parseFloat(t.stop_loss_pct).toFixed(2)}%</span>`;
+    }
+
+    // TP cell: price + % + method
+    let tpCell = '—';
+    if (t.tp_price != null) {
+      const tpPct  = t.tp_pct    != null ? parseFloat(t.tp_pct).toFixed(2)  + '%' : '';
+      const tpMeth = t.tp_method ? `<span class="text-slate-500 text-xs block">${t.tp_method}</span>` : '';
+      tpCell = `<span class="text-emerald-400">${parseFloat(t.tp_price).toPrecision(6)}</span>
+                <span class="text-slate-500 text-xs"> +${tpPct}</span>${tpMeth}`;
+    } else if (t.take_profit_pct != null) {
+      tpCell = `<span class="text-slate-400 text-xs">+${parseFloat(t.take_profit_pct).toFixed(2)}%</span>`;
+    }
+
     return `<tr>
       <td><a href="${tvUrl(t.asset||'')}" target="_blank" class="font-medium text-white hover:text-indigo-400 transition-colors">${(t.asset||'').replace('/USDT','')}/USDT ↗</a></td>
       <td>${dir}</td>
-      <td>${parseFloat(t.entry_price||0).toFixed(4)}</td>
-      <td>${parseFloat(t.exit_price||0).toFixed(4)}</td>
-      <td class="text-slate-300">${capital}</td>
-      <td class="text-slate-400 text-xs">${qty}</td>
+      <td>${parseFloat(t.entry_price||0).toPrecision(6)}</td>
+      <td>${parseFloat(t.exit_price||0).toPrecision(6)}</td>
+      <td class="text-center">${rrCell}</td>
+      <td class="text-xs leading-tight">${slCell}</td>
+      <td class="text-xs leading-tight">${tpCell}</td>
       <td>${pnlPct}</td>
       <td>${pnlUsd}</td>
       <td><span class="text-slate-400">${reason}</span>${signal}</td>
       <td><span class="badge ${regimeClass(regime)} text-xs">${regime}</span></td>
-      <td class="text-slate-500">${ver}</td>
       <td class="text-slate-500 text-xs">${dt}</td>
     </tr>`;
   }).join('');
@@ -916,11 +963,14 @@ async function refreshLivePrices() {
       const pos   = _openPositions[asset];
       const mult  = pos.direction === 'long' ? 1 : -1;
       const entry = parseFloat(pos.entry_price);
-      const pnlPct = ((price - entry) / entry) * mult * 100;
+      const pnlPct   = ((price - entry) / entry) * mult * 100;
       const deployed = parseFloat(pos.usdt_deployed || 0);
       const pnlUsd   = pnlPct / 100 * deployed;
-      const tpPct    = parseFloat(pos.take_profit_pct || 3.0);
-      const slPct    = parseFloat(pos.stop_loss_pct   || 1.8);
+      // Use structural levels when available for bar progress
+      const tpPrice  = pos.tp_price ? parseFloat(pos.tp_price)
+                     : (pos.direction === 'long' ? entry*(1+(parseFloat(pos.take_profit_pct||3.0)/100))
+                                                 : entry*(1-(parseFloat(pos.take_profit_pct||3.0)/100)));
+      const tpPct    = pos.tp_pct ? parseFloat(pos.tp_pct) : Math.abs((tpPrice-entry)/entry*100);
       const pnlColor = pnlPct >= 0 ? '#34d399' : '#f87171';
       const barPct   = Math.min(Math.abs(pnlPct) / tpPct * 100, 100).toFixed(1);
 
@@ -931,7 +981,7 @@ async function refreshLivePrices() {
         if (el.dataset.field === 'pnlpct')  { el.textContent = (pnlPct>=0?'+':'') + pnlPct.toFixed(3) + '%'; el.style.color = pnlColor; }
         if (el.dataset.field === 'pnlusd')  { el.textContent = (pnlUsd>=0?'+':'') + '$' + pnlUsd.toFixed(4); el.style.color = pnlColor; }
         if (el.dataset.field === 'bar')     { el.style.width = barPct + '%'; el.style.background = pnlColor; }
-        if (el.dataset.field === 'barlabel'){ el.textContent = (pnlPct>=0?'+':'') + pnlPct.toFixed(2) + '% of ' + tpPct + '% target'; }
+        if (el.dataset.field === 'barlabel'){ el.textContent = (pnlPct>=0?'+':'') + pnlPct.toFixed(2) + '% of ' + tpPct.toFixed(2) + '% target'; }
       });
     } catch(e) { /* silent */ }
   }));

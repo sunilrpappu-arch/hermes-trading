@@ -34,6 +34,8 @@ from hermes_trading.indicators import (
     candlestick_patterns,
     chart_patterns,
     bb_squeeze,
+    vwap as compute_vwap,
+    dynamic_levels,
     prev_day_levels,
     opening_range as compute_opening_range,
     swing_levels as compute_swing_levels,
@@ -203,7 +205,7 @@ async def fetch_with_retry(fn, *args, **kwargs):
 
 
 DEFAULT_STRATEGY = {
-    "version": "15",
+    "version": "18",
     # Bull regime: price above 50MA on 4H, ADX >= 20
     # Long bias — buy RSI dips. Short only on confirmed liquidity grabs.
     "bull": {
@@ -445,7 +447,8 @@ class TradingLoop:
 
     def _htf_signals_long(self, candles: dict,
                           patterns_4h: dict = None, patterns_1h: dict = None,
-                          bb_1h: dict = None) -> tuple[int, list[str]]:
+                          bb_1h: dict = None,
+                          vwap_data: dict = None) -> tuple[int, list[str]]:
         confirmed = []
         c4h = get_closes(candles.get("4h", []))
         m4h = compute_macd(c4h)
@@ -473,11 +476,19 @@ class TradingLoop:
         if bb_1h and bb_1h.get("expanding") and bb_1h.get("expansion_dir") == "up":
             label = "1H BB squeeze→up" if bb_1h.get("was_squeezing") else "1H BB expanding up"
             confirmed.append(label)
+        # VWAP: price above VWAP = institutional buy-side in control (bullish bias)
+        if vwap_data and vwap_data.get("price_above"):
+            confirmed.append("above VWAP")
+        # VWAP oversold band: price at/below -1σ = mean-reversion long setup
+        if vwap_data and (vwap_data.get("at_lower_1") or vwap_data.get("at_lower_2")):
+            band = "VWAP -2σ" if vwap_data.get("at_lower_2") else "VWAP -1σ"
+            confirmed.append(f"bounce off {band}")
         return len(confirmed), confirmed
 
     def _htf_signals_short(self, candles: dict,
                            patterns_4h: dict = None, patterns_1h: dict = None,
-                           bb_1h: dict = None) -> tuple[int, list[str]]:
+                           bb_1h: dict = None,
+                           vwap_data: dict = None) -> tuple[int, list[str]]:
         confirmed = []
         c4h = get_closes(candles.get("4h", []))
         m4h = compute_macd(c4h)
@@ -505,6 +516,13 @@ class TradingLoop:
         if bb_1h and bb_1h.get("expanding") and bb_1h.get("expansion_dir") == "down":
             label = "1H BB squeeze→down" if bb_1h.get("was_squeezing") else "1H BB expanding down"
             confirmed.append(label)
+        # VWAP: price below VWAP = institutional sell-side in control (bearish bias)
+        if vwap_data and not vwap_data.get("price_above"):
+            confirmed.append("below VWAP")
+        # VWAP overbought band: price at/above +1σ = mean-reversion short setup
+        if vwap_data and (vwap_data.get("at_upper_1") or vwap_data.get("at_upper_2")):
+            band = "VWAP +2σ" if vwap_data.get("at_upper_2") else "VWAP +1σ"
+            confirmed.append(f"rejected at {band}")
         return len(confirmed), confirmed
 
     # ------------------------------------------------------------------
@@ -570,7 +588,13 @@ class TradingLoop:
         ma50    = sma(c1h if len(c1h) >= 50 else self.price_history, ma_period)
         trend   = ("warming_up" if ma50 is None
                    else ("uptrend" if current_price > ma50 else "downtrend"))
-        regime  = (market_data or {}).get("regime", "normal")
+        regime          = (market_data or {}).get("regime", "normal")
+        total2_bias     = (market_data or {}).get("total2_bias",     "neutral")
+        total3_bias     = (market_data or {}).get("total3_bias",     "neutral")
+        alt_season      = (market_data or {}).get("alt_season",      False)
+        btc_dom_rising  = (market_data or {}).get("btc_dom_rising",  False)
+        macro_sentiment = (market_data or {}).get("macro_sentiment", "neutral")
+        eth_vs_btc      = (market_data or {}).get("eth_vs_btc",      "neutral")
 
         # Liquidity grab check on 15m candles
         lq = (detect_liquidity_grab(candles.get("15m", []))
@@ -608,6 +632,10 @@ class TradingLoop:
         # BB squeeze on 1H for HTF context
         c1h_full = get_closes(candles.get("1h", []))
         bb_1h = (bb_squeeze(c1h_full) if len(c1h_full) >= 70 else _bb_empty)
+
+        # VWAP on 15m candles (intraday, resets at UTC midnight)
+        # price_above → bullish intraday bias; band touches → precision entry/exit levels
+        vwap_15m = compute_vwap(candles_15m_raw) if len(candles_15m_raw) >= 5 else None
 
         # Sideways / range level computation
         candles_1h_raw  = candles.get("1h", [])
@@ -663,13 +691,28 @@ class TradingLoop:
             elif all_stop:
                 should_close = True
                 close_reason = "all_stop"
-            # 3. Normal stop/TP
-            elif price_pct <= -stop_trigger:
-                should_close = True
-                close_reason = "stop_loss"
-            elif price_pct >= tp_trigger:
-                should_close = True
-                close_reason = "take_profit"
+            # 3. Normal stop/TP — use structural price levels when stored, else % fallback
+            else:
+                sl_lvl = self.open_position.get("sl_price")
+                tp_lvl = self.open_position.get("tp_price")
+                if sl_lvl and tp_lvl:
+                    # Dynamic level triggers (structural / Fibonacci)
+                    if pos_direction == "long":
+                        if current_price <= sl_lvl:
+                            should_close, close_reason = True, "stop_loss"
+                        elif current_price >= tp_lvl:
+                            should_close, close_reason = True, "take_profit"
+                    else:
+                        if current_price >= sl_lvl:
+                            should_close, close_reason = True, "stop_loss"
+                        elif current_price <= tp_lvl:
+                            should_close, close_reason = True, "take_profit"
+                else:
+                    # Legacy fallback for positions opened before v18
+                    if price_pct <= -stop_trigger:
+                        should_close, close_reason = True, "stop_loss"
+                    elif price_pct >= tp_trigger:
+                        should_close, close_reason = True, "take_profit"
 
             if should_close:
                 if is_live():
@@ -824,29 +867,29 @@ class TradingLoop:
                 range_short_rsi = 70   # RSI must be genuinely overbought to short at range top
                 range_long_rsi  = 30   # RSI must be genuinely oversold  to long at range bottom
                 if rng_pos is not None and rng_high and rng_low and (rng_high - rng_low) > 0:
-                    # Range extreme short: RSI overbought + bearish candle + not breaking out
+                    # Pre-compute candlestick helpers for both directions
                     cs_bear_confirms = bool(cs["bearish_signals"])   # shooting star, bear engulf, bear marubozu, doji
                     cs_bull_blocks   = cs["bull_marubozu"]           # strong bull candle = don't short
+                    cs_bull_confirms = bool(cs["bullish_signals"])   # hammer, bull engulf, bull marubozu, doji
+                    cs_bear_blocks   = cs["bear_marubozu"]           # strong bear candle = don't long
+                    # Range extreme short: RSI overbought + bearish candle + not breaking out
                     if (rng_pos >= (1.0 - sw_entry_pct)
                             and rsi_15m > range_short_rsi
                             and not bo["breakout"]
                             and not cs_bull_blocks):
                         cs_note = f"+cs({','.join(cs['bearish_signals'])})" if cs_bear_confirms else ""
                         lq_note             = f"range_extreme_short({rng_pos:.0%} rsi={rsi_15m:.0f}){cs_note}"
-                        _, htf_reasons      = self._htf_signals_short(candles, patterns_4h, patterns_1h, bb_1h)
+                        _, htf_reasons      = self._htf_signals_short(candles, patterns_4h, patterns_1h, bb_1h, vwap_15m)
                         new_direction       = "short"
                         range_override_fired = True
-
                     # Range extreme long: RSI oversold + bullish candle + not breaking down
-                    cs_bull_confirms = bool(cs["bullish_signals"])   # hammer, bull engulf, bull marubozu, doji
-                    cs_bear_blocks   = cs["bear_marubozu"]           # strong bear candle = don't long
                     elif (rng_pos <= sw_entry_pct
                             and rsi_15m < range_long_rsi
                             and not bo["breakdown"]
                             and not cs_bear_blocks):
                         cs_note = f"+cs({','.join(cs['bullish_signals'])})" if cs_bull_confirms else ""
                         lq_note             = f"range_extreme_long({rng_pos:.0%} rsi={rsi_15m:.0f}){cs_note}"
-                        _, htf_reasons      = self._htf_signals_long(candles, patterns_4h, patterns_1h, bb_1h)
+                        _, htf_reasons      = self._htf_signals_long(candles, patterns_4h, patterns_1h, bb_1h, vwap_15m)
                         new_direction       = "long"
                         range_override_fired = True
 
@@ -862,27 +905,27 @@ class TradingLoop:
                         # 1. Breakout long — confirmed by bull marubozu or engulfing
                         if bo["breakout"] and trend == "uptrend" and not cs["bear_marubozu"]:
                             lq_note        = f"breakout(res={bo['resistance']:.6g}){cs_bull_str}"
-                            _, htf_reasons = self._htf_signals_long(candles, patterns_4h, patterns_1h, bb_1h)
+                            _, htf_reasons = self._htf_signals_long(candles, patterns_4h, patterns_1h, bb_1h, vwap_15m)
                             new_direction  = "long"
                         # 2. RSI dip buy — require bullish candle confirmation (hammer/engulf)
                         elif (rsi_15m < bull_long_thr and trend == "uptrend"
                                 and (cs_bull_ok or lq_bull)):
                             lq_note        = cs_bull_str
-                            _, htf_reasons = self._htf_signals_long(candles, patterns_4h, patterns_1h, bb_1h)
+                            _, htf_reasons = self._htf_signals_long(candles, patterns_4h, patterns_1h, bb_1h, vwap_15m)
                             new_direction  = "long"
                         # 3. Short signals — only fire when not breaking out + bearish candle
                         elif not bo["breakout"]:
                             if bo["false_breakout"] and cs_bear_ok:
                                 lq_note        = f"false_breakout(res={bo['resistance']:.6g}){cs_bear_str}"
-                                _, htf_reasons = self._htf_signals_short(candles, patterns_4h, patterns_1h, bb_1h)
+                                _, htf_reasons = self._htf_signals_short(candles, patterns_4h, patterns_1h, bb_1h, vwap_15m)
                                 new_direction  = "short"
                             elif rsi_div_15m["bearish"] and cs_bear_ok:
                                 lq_note        = f"rsi_div_bearish_15m{cs_bear_str}"
-                                _, htf_reasons = self._htf_signals_short(candles, patterns_4h, patterns_1h, bb_1h)
+                                _, htf_reasons = self._htf_signals_short(candles, patterns_4h, patterns_1h, bb_1h, vwap_15m)
                                 new_direction  = "short"
                             elif bull_cfg.get("short_on_lq_only", True) and lq_bear and cs_bear_ok:
                                 lq_note        = f"lq_grab_bear(wick={lq['wick_pct']:.3%}){cs_bear_str}"
-                                _, htf_reasons = self._htf_signals_short(candles, patterns_4h, patterns_1h, bb_1h)
+                                _, htf_reasons = self._htf_signals_short(candles, patterns_4h, patterns_1h, bb_1h, vwap_15m)
                                 new_direction  = "short"
 
                     elif pair_regime == "bear":
@@ -890,27 +933,27 @@ class TradingLoop:
                         # 1. Breakdown short — confirmed by bear marubozu or engulfing
                         if bo["breakdown"] and trend == "downtrend" and not cs["bull_marubozu"]:
                             lq_note        = f"breakdown(sup={bo['support']:.6g}){cs_bear_str}"
-                            _, htf_reasons = self._htf_signals_short(candles, patterns_4h, patterns_1h, bb_1h)
+                            _, htf_reasons = self._htf_signals_short(candles, patterns_4h, patterns_1h, bb_1h, vwap_15m)
                             new_direction  = "short"
                         # 2. RSI bounce short — require bearish candle confirmation
                         elif (rsi_15m > bear_short_thr and trend == "downtrend"
                                 and (cs_bear_ok or lq_bear)):
                             lq_note        = cs_bear_str
-                            _, htf_reasons = self._htf_signals_short(candles, patterns_4h, patterns_1h, bb_1h)
+                            _, htf_reasons = self._htf_signals_short(candles, patterns_4h, patterns_1h, bb_1h, vwap_15m)
                             new_direction  = "short"
                         # 3. Long signals — only fire when not breaking down + bullish candle
                         elif not bo["breakdown"]:
                             if bo["false_breakdown"] and cs_bull_ok:
                                 lq_note        = f"false_breakdown(sup={bo['support']:.6g}){cs_bull_str}"
-                                _, htf_reasons = self._htf_signals_long(candles, patterns_4h, patterns_1h, bb_1h)
+                                _, htf_reasons = self._htf_signals_long(candles, patterns_4h, patterns_1h, bb_1h, vwap_15m)
                                 new_direction  = "long"
                             elif rsi_div_15m["bullish"] and cs_bull_ok:
                                 lq_note        = f"rsi_div_bullish_15m{cs_bull_str}"
-                                _, htf_reasons = self._htf_signals_long(candles, patterns_4h, patterns_1h, bb_1h)
+                                _, htf_reasons = self._htf_signals_long(candles, patterns_4h, patterns_1h, bb_1h, vwap_15m)
                                 new_direction  = "long"
                             elif bear_cfg.get("long_on_lq_only", True) and lq_bull and cs_bull_ok:
                                 lq_note        = f"lq_grab_bull(wick={lq['wick_pct']:.3%}){cs_bull_str}"
-                                _, htf_reasons = self._htf_signals_long(candles, patterns_4h, patterns_1h, bb_1h)
+                                _, htf_reasons = self._htf_signals_long(candles, patterns_4h, patterns_1h, bb_1h, vwap_15m)
                                 new_direction  = "long"
 
                     elif pair_regime == "sideways":
@@ -920,12 +963,12 @@ class TradingLoop:
                                 # Range bottom long — need bullish candle, no strong bear momentum
                                 if rng_pos <= sw_entry_pct and (cs_bull_ok or lq_bull):
                                     lq_note        = f"range_bottom({rng_pos:.1%}){cs_bull_str}"
-                                    _, htf_reasons = self._htf_signals_long(candles, patterns_4h, patterns_1h, bb_1h)
+                                    _, htf_reasons = self._htf_signals_long(candles, patterns_4h, patterns_1h, bb_1h, vwap_15m)
                                     new_direction  = "long"
                                 # Range top short — need bearish candle, no strong bull momentum
                                 elif rng_pos >= (1.0 - sw_entry_pct) and (cs_bear_ok or lq_bear):
                                     lq_note        = f"range_top({rng_pos:.1%}){cs_bear_str}"
-                                    _, htf_reasons = self._htf_signals_short(candles, patterns_4h, patterns_1h, bb_1h)
+                                    _, htf_reasons = self._htf_signals_short(candles, patterns_4h, patterns_1h, bb_1h, vwap_15m)
                                     new_direction  = "short"
 
                     else:
@@ -935,15 +978,57 @@ class TradingLoop:
                                 lq_note = f"rsi_div_bullish_15m{cs_bull_str}"
                             elif lq_bull and trend != "uptrend":
                                 lq_note = f"lq_grab(wick={lq['wick_pct']:.3%}){cs_bull_str}"
-                            _, htf_reasons = self._htf_signals_long(candles, patterns_4h, patterns_1h, bb_1h)
+                            _, htf_reasons = self._htf_signals_long(candles, patterns_4h, patterns_1h, bb_1h, vwap_15m)
                             new_direction  = "long"
                         elif (rsi_div_15m["bearish"] or (rsi_15m > 70 and (trend == "downtrend" or lq_bear))) and cs_bear_ok:
                             if rsi_div_15m["bearish"]:
                                 lq_note = f"rsi_div_bearish_15m{cs_bear_str}"
                             elif lq_bear and trend != "downtrend":
                                 lq_note = f"lq_grab(wick={lq['wick_pct']:.3%}){cs_bear_str}"
-                            _, htf_reasons = self._htf_signals_short(candles, patterns_4h, patterns_1h, bb_1h)
+                            _, htf_reasons = self._htf_signals_short(candles, patterns_4h, patterns_1h, bb_1h, vwap_15m)
                             new_direction  = "short"
+
+            # ------------------------------------------------------------------
+            # STEP 3b: Dynamic SL/TP + R:R gate
+            # Compute structural levels before entering.
+            # Trades with R:R < 1.0 are blocked; 1.0–1.5 = warn; 2.0+ = high quality.
+            # ------------------------------------------------------------------
+            _dyn_levels: dict | None = None
+            if new_direction:
+                try:
+                    _dyn_levels = dynamic_levels(
+                        direction    = new_direction,
+                        entry_price  = current_price,
+                        candles_15m  = candles_15m_raw,
+                        candles_1h   = candles_1h_raw,
+                        rng_high     = rng_high,
+                        rng_low      = rng_low,
+                        min_rr       = 1.0,      # block R:R < 1:1
+                        max_sl_pct   = 0.04,     # hard cap: never risk >4%
+                        min_sl_pct   = 0.003,
+                        sl_buffer_pct= 0.003,
+                    )
+                    if _dyn_levels and not _dyn_levels["valid"]:
+                        print(
+                            f"  [R:R] {self.asset} {new_direction.upper()} blocked — "
+                            f"R:R={_dyn_levels['rr_ratio']:.2f} < 1.0 "
+                            f"(SL={_dyn_levels['sl_pct']:.2f}% via {_dyn_levels['sl_method']} "
+                            f"TP={_dyn_levels['tp_pct']:.2f}% via {_dyn_levels['tp_method']})",
+                            flush=True,
+                        )
+                        new_direction = None
+                    elif _dyn_levels:
+                        rr_tag = f"R:R={_dyn_levels['rr_ratio']:.2f}"
+                        print(
+                            f"  [LEVELS] {self.asset} {new_direction.upper()} "
+                            f"SL={_dyn_levels['sl_price']:.6g} ({_dyn_levels['sl_pct']:.2f}% {_dyn_levels['sl_method']}) "
+                            f"TP={_dyn_levels['tp_price']:.6g} ({_dyn_levels['tp_pct']:.2f}% {_dyn_levels['tp_method']}) "
+                            f"{rr_tag}",
+                            flush=True,
+                        )
+                except Exception as _lv_err:
+                    print(f"  [LEVELS] {self.asset} level calc failed: {_lv_err}", flush=True)
+                    _dyn_levels = None
 
             # ------------------------------------------------------------------
             # STEP 3a: BB squeeze gate
@@ -1012,8 +1097,17 @@ class TradingLoop:
                     "leverage":           entry_leverage,
                     "notional_usdt":      round(usdt_to_deploy * entry_leverage, 2),
                     "qty":                qty,
-                    "stop_loss_pct":      stop_loss_pct * 100,
-                    "take_profit_pct":    take_profit_pct * 100,
+                    # Dynamic SL/TP (structural levels)
+                    "sl_price":           _dyn_levels["sl_price"]  if _dyn_levels else None,
+                    "tp_price":           _dyn_levels["tp_price"]  if _dyn_levels else None,
+                    "sl_pct":             _dyn_levels["sl_pct"]    if _dyn_levels else stop_loss_pct * 100,
+                    "tp_pct":             _dyn_levels["tp_pct"]    if _dyn_levels else take_profit_pct * 100,
+                    "rr_ratio":           _dyn_levels["rr_ratio"]  if _dyn_levels else None,
+                    "sl_method":          _dyn_levels["sl_method"] if _dyn_levels else "pct_fallback",
+                    "tp_method":          _dyn_levels["tp_method"] if _dyn_levels else "pct_fallback",
+                    # Legacy pct fields kept for compatibility
+                    "stop_loss_pct":      (_dyn_levels["sl_pct"]   if _dyn_levels else stop_loss_pct * 100),
+                    "take_profit_pct":    (_dyn_levels["tp_pct"]   if _dyn_levels else take_profit_pct * 100),
                     "rsi_at_entry":       round(rsi_15m, 2),
                     "trend_at_entry":     trend,
                     "regime_at_entry":    regime,
@@ -1029,9 +1123,16 @@ class TradingLoop:
                 }
                 self._save_position()
                 signals_str = ", ".join(htf_reasons + ([lq_note] if lq_note else []))
+                lvl_str = ""
+                if _dyn_levels:
+                    lvl_str = (f" | SL={_dyn_levels['sl_price']:.6g}({_dyn_levels['sl_pct']:.2f}%,"
+                               f"{_dyn_levels['sl_method']}) "
+                               f"TP={_dyn_levels['tp_price']:.6g}({_dyn_levels['tp_pct']:.2f}%,"
+                               f"{_dyn_levels['tp_method']}) "
+                               f"R:R={_dyn_levels['rr_ratio']:.2f}")
                 print(f"  → ENTRY {new_direction.upper()} {self.asset} @ {current_price:.4f} "
                       f"lev={entry_leverage}x notional=${usdt_to_deploy*entry_leverage:.0f} "
-                      f"rsi={rsi_15m:.1f} | {signals_str}", flush=True)
+                      f"rsi={rsi_15m:.1f}{lvl_str} | {signals_str}", flush=True)
 
         # Heartbeat
         self.write_heartbeat("ok", {
@@ -1065,6 +1166,29 @@ class TradingLoop:
             "bb_dir":        bb["expansion_dir"],
             "bb_bandwidth":  bb["bb"]["bandwidth"] if bb["bb"] else None,
             "bb_pct_b":      bb["bb"]["pct_b"]     if bb["bb"] else None,
+            # VWAP (Step 3 — intraday institutional anchor)
+            "vwap":          vwap_15m["vwap"]          if vwap_15m else None,
+            "vwap_upper_1":  vwap_15m["upper_1"]       if vwap_15m else None,
+            "vwap_lower_1":  vwap_15m["lower_1"]       if vwap_15m else None,
+            "vwap_upper_2":  vwap_15m["upper_2"]       if vwap_15m else None,
+            "vwap_lower_2":  vwap_15m["lower_2"]       if vwap_15m else None,
+            "vwap_above":    vwap_15m["price_above"]   if vwap_15m else None,
+            "vwap_pct_dev":  vwap_15m["pct_from_vwap"] if vwap_15m else None,
+            "vwap_at_upper": vwap_15m.get("at_upper_1") or vwap_15m.get("at_upper_2") if vwap_15m else None,
+            "vwap_at_lower": vwap_15m.get("at_lower_1") or vwap_15m.get("at_lower_2") if vwap_15m else None,
+            # Active position levels (for dashboard display)
+            "pos_sl_price":  self.open_position.get("sl_price")  if self.open_position else None,
+            "pos_tp_price":  self.open_position.get("tp_price")  if self.open_position else None,
+            "pos_rr_ratio":  self.open_position.get("rr_ratio")  if self.open_position else None,
+            "pos_sl_method": self.open_position.get("sl_method") if self.open_position else None,
+            "pos_tp_method": self.open_position.get("tp_method") if self.open_position else None,
+            # Total2 / Total3 macro layer
+            "total2_bias":       total2_bias,
+            "total3_bias":       total3_bias,
+            "alt_season":        alt_season,
+            "btc_dom_rising":    btc_dom_rising,
+            "macro_sentiment":   macro_sentiment,
+            "eth_vs_btc":        eth_vs_btc,
             "all_stop":           all_stop,
             "entry_leverage":     entry_leverage,
             "regime_params":      regime_params,
@@ -1078,9 +1202,18 @@ class TradingLoop:
         rng_tag    = f" rng={rng_pos:.0%}" if (rng_pos is not None) else ""
         stop_tag     = " ⛔STOP" if all_stop else ""
         cooldown_tag = f" 🕐{cooldown_remaining/60:.0f}m" if in_cooldown else ""
+        vwap_tag = ""
+        if vwap_15m:
+            vwap_side = "↑VWAP" if vwap_15m["price_above"] else "↓VWAP"
+            vwap_tag  = f" {vwap_side}({vwap_15m['pct_from_vwap']:+.2f}%)"
+        macro_tag = f" T2={total2_bias[0].upper()} T3={total3_bias[0].upper()}"
+        if alt_season:
+            macro_tag += " 🌙ALT"
+        elif btc_dom_rising:
+            macro_tag += " 🟠BTC↑"
         print(
             f"{mode_tag} [{self.asset}] price={current_price:.4f} rsi={rsi_15m:.1f} "
-            f"pair={pair_regime} macro={regime} lev={entry_leverage}x{rng_tag} "
+            f"pair={pair_regime} macro={regime}{macro_tag} lev={entry_leverage}x{rng_tag}{vwap_tag} "
             f"lq={'B' if lq['bullish'] else 'S' if lq['bearish'] else '-'} "
             f"dd={self._pair_drawdown():.1%} day=${DailyLossGuard._daily_pnl:+.2f} "
             f"pos={pos_tag}{stop_tag}{cooldown_tag}",

@@ -104,14 +104,21 @@ async def build_market_data(pairs: list[str], regime_info: dict) -> dict[str, di
     for pair in pairs:
         pd = prices.get(pair, {})
         market_data[pair] = {
-            "asset":         pair,
-            "price":         pd.get("price", 0.0),
-            "timestamp":     pd.get("timestamp", 0),
-            "candles":       all_candles.get(pair, {}),
-            "regime":        regime_info.get("regime", "normal"),
-            "is_sideways":   regime_info.get("is_sideways", False),
-            "adx":           regime_info.get("adx"),
-            "regime_params": regime_info,
+            "asset":           pair,
+            "price":           pd.get("price", 0.0),
+            "timestamp":       pd.get("timestamp", 0),
+            "candles":         all_candles.get(pair, {}),
+            "regime":          regime_info.get("regime", "normal"),
+            "is_sideways":     regime_info.get("is_sideways", False),
+            "adx":             regime_info.get("adx"),
+            "regime_params":   regime_info,
+            # Total2 / Total3 macro signals
+            "total2_bias":     regime_info.get("total2_bias", "neutral"),
+            "total3_bias":     regime_info.get("total3_bias", "neutral"),
+            "alt_season":      regime_info.get("alt_season", False),
+            "btc_dom_rising":  regime_info.get("btc_dom_rising", False),
+            "macro_sentiment": regime_info.get("macro_sentiment", "neutral"),
+            "eth_vs_btc":      regime_info.get("eth_vs_btc", "neutral"),
         }
     return market_data
 
@@ -136,9 +143,21 @@ async def run_all(universe: list[str], total_capital: float, force_pairs: list[s
     async def rescan():
         nonlocal regime_info, active_pairs
 
-        # 1. Detect volatility regime from BTC 1H candles
-        btc_candles_1h = await fetch_candles("BTC/USDT", "1h", 100)
-        regime_info = await detect_regime(btc_candles_1h)
+        # 1. Detect volatility regime — BTC (Layer 1) + ETH (Total2) + alt basket (Total3)
+        _macro_pairs = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "ADA/USDT"]
+        _macro_candles = await asyncio.gather(
+            *[fetch_candles(p, "1h", 100) for p in _macro_pairs],
+            return_exceptions=True,
+        )
+        btc_candles_1h  = _macro_candles[0] if not isinstance(_macro_candles[0], Exception) else []
+        eth_candles_1h  = _macro_candles[1] if not isinstance(_macro_candles[1], Exception) else []
+        _total3_symbols = ["SOL/USDT", "BNB/USDT", "ADA/USDT"]
+        alt_candles_1h  = {
+            sym: _macro_candles[i + 2]
+            for i, sym in enumerate(_total3_symbols)
+            if not isinstance(_macro_candles[i + 2], Exception)
+        }
+        regime_info = await detect_regime(btc_candles_1h, eth_candles_1h, alt_candles_1h)
 
         # 2. Select pairs — fetch live universe from Binance, fall back to goal.yaml list
         if force_pairs:
@@ -146,7 +165,7 @@ async def run_all(universe: list[str], total_capital: float, force_pairs: list[s
         else:
             goal      = load_goal()
             live_universe = await fetch_universe(filters=goal.get("universe_filters", {}))
-            selected  = await scan_pairs(live_universe, regime_info["max_pairs"], regime_info.get("vol", 0.02))
+            selected  = await scan_pairs(live_universe, regime_info["max_pairs"], regime_info.get("vol", 0.02), regime_info)
 
         # 3. Retire loops no longer selected — but NEVER retire a pair with an open position
         for pair in list(loops.keys()):

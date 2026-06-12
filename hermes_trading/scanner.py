@@ -24,7 +24,7 @@ from hermes_trading.indicators import (
     rsi as compute_rsi, sma, rsi_divergence,
     liquidity_grab as detect_liquidity_grab,
     breakout_detector, candlestick_patterns, chart_patterns,
-    bb_squeeze, macd as compute_macd,
+    bb_squeeze, macd as compute_macd, vwap as compute_vwap,
 )
 
 # ---------------------------------------------------------------------------
@@ -203,13 +203,17 @@ def _build_pairs(symbols_info: dict, volume_map: dict, min_vol_usdt: float) -> l
 # Scorer
 # ---------------------------------------------------------------------------
 
-async def scan(universe: list[str], max_pairs: int, regime_vol: float) -> list[str]:
+async def scan(universe: list[str], max_pairs: int, regime_vol: float,
+               regime_info: dict = None) -> list[str]:
     """
     Score every pair in `universe` and return the top `max_pairs`.
     Falls back to top `max_pairs` by position if scoring fails.
+
+    regime_info (optional): full output of volatility.detect() — used to apply
+    Total2/Total3 macro biases (alt_season / btc_dom_rising).
     """
     try:
-        scores  = await _score_all(universe, regime_vol)
+        scores  = await _score_all(universe, regime_vol, regime_info or {})
         ranked  = sorted(scores.items(), key=lambda x: x[1], reverse=True)
         selected = [pair for pair, _ in ranked[:max_pairs]]
         print(
@@ -223,14 +227,14 @@ async def scan(universe: list[str], max_pairs: int, regime_vol: float) -> list[s
         return universe[:max_pairs]
 
 
-async def _score_all(universe: list[str], regime_vol: float) -> dict[str, float]:
+async def _score_all(universe: list[str], regime_vol: float, regime_info: dict) -> dict[str, float]:
     import asyncio
     # Score in parallel but cap concurrency to avoid hammering candle API
     sem = asyncio.Semaphore(10)
 
     async def _guarded(pair):
         async with sem:
-            return await _score_pair(pair, regime_vol)
+            return await _score_pair(pair, regime_vol, regime_info)
 
     results = await asyncio.gather(*[_guarded(p) for p in universe], return_exceptions=True)
     return {
@@ -239,9 +243,9 @@ async def _score_all(universe: list[str], regime_vol: float) -> dict[str, float]
     }
 
 
-async def _score_pair(pair: str, regime_vol: float) -> float:
+async def _score_pair(pair: str, regime_vol: float, regime_info: dict) -> float:
     """
-    Score a single pair 0–100 base + up to 40 conviction bonus.
+    Score a single pair 0–100 base + conviction + macro bonuses.
 
     Base score (0–100):
       30 pts  Liquidity       (log-normalised 24h USDT volume)
@@ -249,16 +253,21 @@ async def _score_pair(pair: str, regime_vol: float) -> float:
       25 pts  Trend clarity   (price distance from 50MA)
       20 pts  Volatility fit  (pair's vol vs regime vol)
 
-    Conviction bonus (+5–40 pts):
-      Each additional confirming signal adds pts on top of the base score.
-      Pairs with multiple aligned signals always rank above single-signal pairs
-      of equal liquidity, ensuring the top-5 slots go to highest-conviction setups.
+    Conviction bonus:
+      +10  RSI extreme (>70 or <30)
+      +10  RSI divergence (1H)
+      +10  Breakout / breakdown (1H)
+      +10  Liquidity grab (15m wick sweep)
+      +5   MACD crossover (1H)
+      +10  Candlestick patterns
+      +10/+20  BB squeeze → expansion
+      +5/+15   VWAP alignment / band touch
+      +15  Chart patterns (confidence-weighted)
 
-      +10  RSI extreme (>70 or <30) — strong momentum signal
-      +10  RSI divergence (bullish or bearish on 1H) — reversal confirmation
-      +10  Breakout or breakdown on 1H — momentum continuation
-      +10  Liquidity grab (15m wick sweep) — stop-hunt reversal
-      +5   MACD crossover (1H) — trend confirmation
+    Macro bonus (Total2/Total3 layer):
+      +15  alt_season=True and pair is not BTC/ETH (alts outperforming)
+      -15  btc_dom_rising=True and pair is not BTC/ETH (alts losing share)
+      +10  macro_sentiment agrees with pair's RSI direction (bull → rsi<50, bear → rsi>50)
     """
     candles_1h = await fetch_candles(pair, "1h", 100)
     if len(candles_1h) < 20:
@@ -355,6 +364,23 @@ async def _score_pair(pair: str, regime_vol: float) -> float:
     except Exception:
         pass
 
+    # VWAP alignment on 1H (+10 if price is aligned with direction bias)
+    # VWAP band touch (+15 if at ±1σ or ±2σ — precision mean-reversion level)
+    try:
+        vw = compute_vwap(candles_1h)
+        if vw:
+            # General alignment: above/below VWAP = directional bias (+5)
+            conviction += 5
+            signals.append("↑VWAP" if vw["price_above"] else "↓VWAP")
+            # Band touch: price at ±1σ or ±2σ = highest-precision entry level (+10 more)
+            if vw.get("at_upper_1") or vw.get("at_upper_2") or vw.get("at_lower_1") or vw.get("at_lower_2"):
+                conviction += 10
+                band = ("+2σ" if vw.get("at_upper_2") else "+1σ" if vw.get("at_upper_1")
+                        else "-2σ" if vw.get("at_lower_2") else "-1σ")
+                signals.append(f"VWAP_band({band})")
+    except Exception:
+        pass
+
     # Chart patterns on 1H (+15 for high-confidence patterns like H&S, triangle)
     # Pairs with a pattern in play are higher priority — clear setup = clear entry
     try:
@@ -369,9 +395,48 @@ async def _score_pair(pair: str, regime_vol: float) -> float:
     except Exception:
         pass
 
-    total = round(base_score + conviction, 2)
-    if signals:
-        print(f"[scanner] {pair} base={base_score:.1f} +{conviction}pts ({', '.join(signals)}) → {total}", flush=True)
+    # ── Macro bonus: Total2 / Total3 layer ────────────────────────────────
+    # These bonuses shift the ranking of the whole pair, not just a single signal.
+    macro_bonus = 0
+    macro_notes = []
+    alt_season      = regime_info.get("alt_season",      False)
+    btc_dom_rising  = regime_info.get("btc_dom_rising",  False)
+    macro_sentiment = regime_info.get("macro_sentiment", "neutral")
+
+    is_btc = pair.startswith("BTC/")
+    is_eth = pair.startswith("ETH/")
+    is_alt = not is_btc and not is_eth
+
+    if is_alt and alt_season:
+        # Alt season: money rotating into alts — boost all non-BTC/ETH pairs
+        macro_bonus += 15
+        macro_notes.append("alt_season(+15)")
+    elif is_alt and btc_dom_rising:
+        # BTC dominance rising: alts losing share to BTC — penalise alt pairs
+        macro_bonus -= 15
+        macro_notes.append("btc_dom(-15)")
+
+    if is_btc and btc_dom_rising:
+        # BTC taking market share — BTC setups get a boost
+        macro_bonus += 10
+        macro_notes.append("btc_dom(+10)")
+
+    # Macro sentiment alignment: if macro is bull and RSI is oversold, high-conviction long
+    if macro_sentiment == "bull" and rsi_val < 45:
+        macro_bonus += 10
+        macro_notes.append("macro_bull_dip(+10)")
+    elif macro_sentiment == "bear" and rsi_val > 55:
+        macro_bonus += 10
+        macro_notes.append("macro_bear_bounce(+10)")
+
+    total = round(base_score + conviction + macro_bonus, 2)
+    all_notes = signals + macro_notes
+    if all_notes:
+        print(
+            f"[scanner] {pair} base={base_score:.1f} "
+            f"+{conviction}conv +{macro_bonus}macro ({', '.join(all_notes)}) → {total}",
+            flush=True,
+        )
     return total
 
 

@@ -427,6 +427,91 @@ def range_position(price: float, range_high: float, range_low: float) -> float:
     return max(0.0, min(1.0, (price - range_low) / (range_high - range_low)))
 
 
+def vwap(candles: list[dict], reset_daily: bool = True) -> dict | None:
+    """
+    Volume Weighted Average Price — resets at UTC midnight by default (intraday VWAP).
+
+    Uses typical price = (high + low + close) / 3, volume-weighted.
+    Bands are ±1σ and ±2σ of the volume-weighted standard deviation.
+
+    Returns:
+      {
+        "vwap":          float   — current VWAP
+        "upper_1":       float   — VWAP + 1σ  (overbought zone)
+        "lower_1":       float   — VWAP - 1σ  (oversold zone)
+        "upper_2":       float   — VWAP + 2σ  (extreme overbought)
+        "lower_2":       float   — VWAP - 2σ  (extreme oversold)
+        "std":           float
+        "price_above":   bool    — price > VWAP (bullish intraday bias)
+        "pct_from_vwap": float   — % deviation (+ above, - below)
+        "at_upper_1":    bool    — price near +1σ band (potential short)
+        "at_lower_1":    bool    — price near -1σ band (potential long)
+        "at_upper_2":    bool    — price near +2σ band (extreme short)
+        "at_lower_2":    bool    — price near -2σ band (extreme long)
+        "candles_used":  int
+      }
+    Returns None if no data or zero volume.
+    """
+    from datetime import datetime, timezone
+
+    if not candles:
+        return None
+
+    # Intraday: use only today's UTC candles; fall back to last 20 if none yet
+    if reset_daily:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        data  = [
+            c for c in candles
+            if datetime.fromtimestamp(c["ts"] / 1000, tz=timezone.utc).strftime("%Y-%m-%d") == today
+        ] or candles[-20:]
+    else:
+        data = candles
+
+    if not data:
+        return None
+
+    cum_vol  = 0.0
+    cum_pv   = 0.0
+    cum_pv2  = 0.0  # for variance: E[P²] - E[P]²
+
+    for c in data:
+        tp  = (c["high"] + c["low"] + c["close"]) / 3.0
+        vol = float(c.get("volume") or 0)
+        cum_vol  += vol
+        cum_pv   += tp * vol
+        cum_pv2  += tp * tp * vol
+
+    if cum_vol == 0:
+        return None
+
+    vwap_val = cum_pv / cum_vol
+    variance = max(0.0, (cum_pv2 / cum_vol) - vwap_val ** 2)
+    std      = variance ** 0.5
+
+    price     = data[-1]["close"]
+    dev_pct   = (price - vwap_val) / vwap_val * 100 if vwap_val > 0 else 0.0
+    band_tol  = 0.003   # within 0.3% of band = "at" the band
+
+    def _near(level: float) -> bool:
+        return vwap_val > 0 and abs(price - level) / vwap_val <= band_tol
+
+    return {
+        "vwap":          round(vwap_val,          8),
+        "upper_1":       round(vwap_val + std,     8),
+        "lower_1":       round(vwap_val - std,     8),
+        "upper_2":       round(vwap_val + 2 * std, 8),
+        "lower_2":       round(vwap_val - 2 * std, 8),
+        "std":           round(std,                8),
+        "price_above":   price > vwap_val,
+        "pct_from_vwap": round(dev_pct, 4),
+        "at_upper_1":    _near(vwap_val + std),
+        "at_lower_1":    _near(vwap_val - std),
+        "at_upper_2":    _near(vwap_val + 2 * std),
+        "at_lower_2":    _near(vwap_val - 2 * std),
+        "candles_used":  len(data),
+    }
+
+
 def bollinger_bands(
     closes: list[float],
     period: int = 20,
@@ -958,6 +1043,180 @@ def chart_patterns(candles: list[dict], lookback: int = 50, swing_window: int = 
         "bearish_patterns": [p["name"] for p in bear],
         "best_bullish":     max(bull, key=lambda p: p["confidence"]) if bull else None,
         "best_bearish":     max(bear, key=lambda p: p["confidence"]) if bear else None,
+    }
+
+
+def dynamic_levels(
+    direction: str,
+    entry_price: float,
+    candles_15m: list[dict],
+    candles_1h: list[dict],
+    rng_high: float = None,
+    rng_low: float = None,
+    min_rr: float = 1.0,
+    max_sl_pct: float = 0.04,   # never risk more than 4% on a single trade
+    min_sl_pct: float = 0.003,  # never place SL inside 0.3% noise band
+    sl_buffer_pct: float = 0.003,  # buffer just beyond the structural level
+) -> dict:
+    """
+    Compute dynamic stop-loss and take-profit levels from price structure.
+
+    Priority order
+    ──────────────
+    Stop-loss:
+      1. Nearest structural level on the losing side (swing high/low, range extreme)
+      2. ATR-based fallback  (entry ± 1.5 × ATR_15m)
+
+    Take-profit:
+      1. Nearest structural level on the winning side that satisfies min_rr
+      2. Fibonacci extension from risk:  1.0×, 1.618×, 2.0×, 2.618×, 3.0×
+
+    Returns
+    ───────
+    {
+      sl_price  float   absolute SL level
+      tp_price  float   absolute TP level
+      sl_pct    float   risk %  (e.g. 0.018 = 1.8%)
+      tp_pct    float   reward % (e.g. 0.036 = 3.6%)
+      rr_ratio  float   reward / risk  (1.0 = 1:1)
+      sl_method str     where the SL was placed
+      tp_method str     where the TP was placed
+      valid     bool    True if rr_ratio >= min_rr
+    }
+    """
+    is_long = direction == "long"
+
+    # ── Collect structural levels ─────────────────────────────────────────
+    # 15m swing levels (short-term structure)
+    sh_15m = _candle_swing_highs(candles_15m[-40:], window=3) if len(candles_15m) >= 10 else []
+    sl_15m = _candle_swing_lows (candles_15m[-40:], window=3) if len(candles_15m) >= 10 else []
+
+    # 1H swing levels (medium-term structure)
+    sh_1h  = _candle_swing_highs(candles_1h[-60:],  window=3) if len(candles_1h) >= 10 else []
+    sl_1h  = _candle_swing_lows (candles_1h[-60:],  window=3) if len(candles_1h) >= 10 else []
+
+    # All swing highs / lows as flat lists of prices
+    all_highs = sorted({v for _, v in sh_15m + sh_1h}, reverse=True)
+    all_lows  = sorted({v for _, v in sl_15m + sl_1h})
+
+    # ATR for noise-floor estimate
+    h15 = [c["high"]  for c in candles_15m] if candles_15m else []
+    l15 = [c["low"]   for c in candles_15m] if candles_15m else []
+    c15 = [c["close"] for c in candles_15m] if candles_15m else []
+    atr_val = atr(h15, l15, c15, period=14) or (entry_price * 0.008)
+
+    # ── Stop-loss placement ───────────────────────────────────────────────
+    sl_price  = None
+    sl_method = "atr_fallback"
+
+    if is_long:
+        # SL below entry: highest structural low that is still below entry
+        candidates = [p - entry_price * sl_buffer_pct
+                      for p in all_lows if p < entry_price * (1 - min_sl_pct)]
+        if rng_low and rng_low < entry_price * (1 - min_sl_pct):
+            candidates.append(rng_low - entry_price * sl_buffer_pct)
+        # Pick closest (highest) candidate below entry
+        valid_sl = [p for p in candidates if p < entry_price]
+        if valid_sl:
+            sl_price       = max(valid_sl)
+            _range_sl_low  = (rng_low  - entry_price * sl_buffer_pct) if rng_low  else None
+            sl_method      = "range_low"  if (_range_sl_low  and abs(sl_price - _range_sl_low)  < entry_price * 0.0005) else "swing_low"
+    else:
+        # SL above entry: lowest structural high that is still above entry
+        candidates = [p + entry_price * sl_buffer_pct
+                      for p in all_highs if p > entry_price * (1 + min_sl_pct)]
+        if rng_high and rng_high > entry_price * (1 + min_sl_pct):
+            candidates.append(rng_high + entry_price * sl_buffer_pct)
+        valid_sl = [p for p in candidates if p > entry_price]
+        if valid_sl:
+            sl_price        = min(valid_sl)
+            _range_sl_high  = (rng_high + entry_price * sl_buffer_pct) if rng_high else None
+            sl_method       = "range_high" if (_range_sl_high and abs(sl_price - _range_sl_high) < entry_price * 0.0005) else "swing_high"
+
+    # ATR fallback if no structural SL found
+    if sl_price is None:
+        sl_price  = entry_price - 1.5 * atr_val if is_long else entry_price + 1.5 * atr_val
+        sl_method = "atr_1.5x"
+
+    # Clamp SL to [min_sl_pct, max_sl_pct] range
+    sl_dist = abs(entry_price - sl_price)
+    if sl_dist < entry_price * min_sl_pct:
+        sl_dist  = entry_price * min_sl_pct
+        sl_price = entry_price - sl_dist if is_long else entry_price + sl_dist
+        sl_method += "+min_clamp"
+    if sl_dist > entry_price * max_sl_pct:
+        sl_dist  = entry_price * max_sl_pct
+        sl_price = entry_price - sl_dist if is_long else entry_price + sl_dist
+        sl_method += "+max_clamp"
+
+    sl_pct = sl_dist / entry_price
+
+    # ── Take-profit placement ─────────────────────────────────────────────
+    tp_price  = None
+    tp_method = "fib_1.618"
+
+    # Fibonacci extensions from risk (always available as fallback)
+    _fib_levels = [
+        (1.0,   "fib_1:1"),
+        (1.618, "fib_1.618"),
+        (2.0,   "fib_2:1"),
+        (2.618, "fib_2.618"),
+        (3.0,   "fib_3:1"),
+    ]
+    fib_tps = []
+    for mult, label in _fib_levels:
+        fib_tp = (entry_price + sl_dist * mult) if is_long else (entry_price - sl_dist * mult)
+        if fib_tp > 0:
+            fib_tps.append((fib_tp, label))
+
+    if is_long:
+        # Structural TPs: swing highs and range high above entry, satisfying min_rr
+        struct_tps = [p for p in all_highs if p > entry_price]
+        if rng_high and rng_high > entry_price:
+            struct_tps.append(rng_high)
+        # Nearest structural level that achieves min_rr
+        for tp in sorted(struct_tps):
+            if (tp - entry_price) / sl_dist >= min_rr:
+                tp_price  = tp
+                tp_method = "range_high" if (rng_high and abs(tp - rng_high) < entry_price * 0.001) else "swing_high"
+                break
+    else:
+        struct_tps = [p for p in all_lows if p < entry_price]
+        if rng_low and rng_low < entry_price:
+            struct_tps.append(rng_low)
+        for tp in sorted(struct_tps, reverse=True):
+            if (entry_price - tp) / sl_dist >= min_rr:
+                tp_price  = tp
+                tp_method = "range_low" if (rng_low and abs(tp - rng_low) < entry_price * 0.001) else "swing_low"
+                break
+
+    # Fibonacci fallback: pick first fib level that satisfies min_rr
+    if tp_price is None:
+        for fib_tp, label in fib_tps:
+            fib_dist = abs(fib_tp - entry_price)
+            if fib_dist / sl_dist >= min_rr:
+                tp_price  = fib_tp
+                tp_method = label
+                break
+
+    # Final fallback: 1:1 from SL
+    if tp_price is None:
+        tp_price  = entry_price + sl_dist if is_long else entry_price - sl_dist
+        tp_method = "fib_1:1_fallback"
+
+    tp_dist  = abs(tp_price - entry_price)
+    tp_pct   = tp_dist / entry_price
+    rr_ratio = tp_dist / sl_dist if sl_dist > 0 else 0.0
+
+    return {
+        "sl_price":  round(sl_price, 8),
+        "tp_price":  round(tp_price, 8),
+        "sl_pct":    round(sl_pct * 100, 4),    # e.g. 1.8 (not 0.018)
+        "tp_pct":    round(tp_pct * 100, 4),    # e.g. 3.6
+        "rr_ratio":  round(rr_ratio, 3),
+        "sl_method": sl_method,
+        "tp_method": tp_method,
+        "valid":     rr_ratio >= min_rr,
     }
 
 
