@@ -544,39 +544,59 @@ _HTML = r"""<!DOCTYPE html>
 <!-- Fear/Greed + Macro row -->
 <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
 
-  <!-- Fear/Greed gauge -->
-  <div class="card col-span-1">
-    <p class="text-slate-400 text-xs font-semibold mb-3">MARKET SENTIMENT</p>
-    <div class="flex flex-col items-center">
-      <!-- Gauge arc via SVG -->
-      <div style="position:relative;width:180px;height:100px;overflow:hidden;">
-        <svg width="180" height="100" viewBox="0 0 180 100">
-          <!-- Background arc -->
-          <path d="M10,90 A80,80 0 0,1 170,90" fill="none" stroke="#1e293b" stroke-width="16" stroke-linecap="round"/>
-          <!-- Colour gradient segments (5 equal arcs) -->
-          <!-- Each arc covers 36° of the 180° semicircle -->
-          <!-- Extreme Fear: red -->
-          <path d="M10,90 A80,80 0 0,1 42,26" fill="none" stroke="#ef4444" stroke-width="16" stroke-linecap="butt" opacity="0.5"/>
-          <!-- Fear: orange -->
-          <path d="M42,26 A80,80 0 0,1 90,10" fill="none" stroke="#f97316" stroke-width="16" stroke-linecap="butt" opacity="0.5"/>
-          <!-- Neutral: slate -->
-          <path d="M90,10 A80,80 0 0,1 138,26" fill="none" stroke="#64748b" stroke-width="16" stroke-linecap="butt" opacity="0.5"/>
-          <!-- Greed: teal -->
-          <path d="M138,26 A80,80 0 0,1 170,90" fill="none" stroke="#10b981" stroke-width="16" stroke-linecap="butt" opacity="0.5"/>
-          <!-- Needle -->
-          <line id="fg-needle" x1="90" y1="90" x2="90" y2="18"
-            stroke="#e2e8f0" stroke-width="2.5" stroke-linecap="round"
-            transform="rotate(0, 90, 90)"/>
-          <circle cx="90" cy="90" r="5" fill="#e2e8f0"/>
-        </svg>
-        <div style="position:absolute;bottom:2px;width:100%;text-align:center;">
-          <span id="fg-score-num" class="text-3xl font-bold text-white">—</span>
+  <!-- Left column: Real F&G + Hermes Senti-meter stacked -->
+  <div class="col-span-1 flex flex-col gap-4">
+
+    <!-- Real Fear & Greed (alternative.me) -->
+    <div class="card">
+      <p class="text-slate-400 text-xs font-semibold mb-2">FEAR &amp; GREED INDEX <span class="text-slate-600 font-normal">· alternative.me</span></p>
+      <div class="flex flex-col items-center">
+        <div style="position:relative;width:160px;height:88px;overflow:hidden;">
+          <svg width="160" height="88" viewBox="0 0 180 100">
+            <path d="M10,90 A80,80 0 0,1 170,90" fill="none" stroke="#1e293b" stroke-width="16" stroke-linecap="round"/>
+            <path d="M10,90 A80,80 0 0,1 42,26"  fill="none" stroke="#ef4444" stroke-width="16" stroke-linecap="butt" opacity="0.5"/>
+            <path d="M42,26 A80,80 0 0,1 90,10"  fill="none" stroke="#f97316" stroke-width="16" stroke-linecap="butt" opacity="0.5"/>
+            <path d="M90,10 A80,80 0 0,1 138,26" fill="none" stroke="#64748b" stroke-width="16" stroke-linecap="butt" opacity="0.5"/>
+            <path d="M138,26 A80,80 0 0,1 170,90" fill="none" stroke="#10b981" stroke-width="16" stroke-linecap="butt" opacity="0.5"/>
+            <line id="rfg-needle" x1="90" y1="90" x2="90" y2="18"
+              stroke="#e2e8f0" stroke-width="2.5" stroke-linecap="round"
+              transform="rotate(-90, 90, 90)"/>
+            <circle cx="90" cy="90" r="5" fill="#e2e8f0"/>
+          </svg>
+          <div style="position:absolute;bottom:2px;width:100%;text-align:center;">
+            <span id="rfg-score-num" class="text-2xl font-bold text-white">—</span>
+          </div>
         </div>
+        <p id="rfg-label" class="text-xs font-bold mt-1 text-slate-300">Loading…</p>
       </div>
-      <p id="fg-label" class="text-sm font-bold mt-1 text-slate-300">Loading…</p>
-      <div id="fg-signals" class="mt-2 space-y-0.5 text-center"></div>
     </div>
-  </div>
+
+    <!-- Hermes Senti-meter (internal composite) -->
+    <div class="card">
+      <p class="text-slate-400 text-xs font-semibold mb-2">HERMES SENTI-METER <span class="text-slate-600 font-normal">· live pairs</span></p>
+      <div class="flex flex-col items-center">
+        <div style="position:relative;width:160px;height:88px;overflow:hidden;">
+          <svg width="160" height="88" viewBox="0 0 180 100">
+            <path d="M10,90 A80,80 0 0,1 170,90" fill="none" stroke="#1e293b" stroke-width="16" stroke-linecap="round"/>
+            <path d="M10,90 A80,80 0 0,1 42,26" fill="none" stroke="#ef4444" stroke-width="16" stroke-linecap="butt" opacity="0.5"/>
+            <path d="M42,26 A80,80 0 0,1 90,10" fill="none" stroke="#f97316" stroke-width="16" stroke-linecap="butt" opacity="0.5"/>
+            <path d="M90,10 A80,80 0 0,1 138,26" fill="none" stroke="#64748b" stroke-width="16" stroke-linecap="butt" opacity="0.5"/>
+            <path d="M138,26 A80,80 0 0,1 170,90" fill="none" stroke="#10b981" stroke-width="16" stroke-linecap="butt" opacity="0.5"/>
+            <line id="fg-needle" x1="90" y1="90" x2="90" y2="18"
+              stroke="#e2e8f0" stroke-width="2.5" stroke-linecap="round"
+              transform="rotate(0, 90, 90)"/>
+            <circle cx="90" cy="90" r="5" fill="#e2e8f0"/>
+          </svg>
+          <div style="position:absolute;bottom:2px;width:100%;text-align:center;">
+            <span id="fg-score-num" class="text-2xl font-bold text-white">—</span>
+          </div>
+        </div>
+        <p id="fg-label" class="text-xs font-bold mt-1 text-slate-300">Loading…</p>
+        <div id="fg-signals" class="mt-1 space-y-0.5 text-center"></div>
+      </div>
+    </div>
+
+  </div><!-- end left column -->
 
   <!-- Macro regime signals -->
   <div class="card col-span-2">
@@ -1150,7 +1170,26 @@ function renderSentiment(sentiment, data) {
   const fg   = sentiment.fear_greed || {};
   const swan = sentiment.black_swan || {};
 
-  // ── Fear/Greed gauge ──────────────────────────────────────────────────────
+  // ── Real Fear & Greed gauge (alternative.me) ──────────────────────────────
+  const rfg      = sentiment.real_fear_greed || {};
+  const rfgScore = rfg.score != null ? parseInt(rfg.score) : null;
+  const rfgLabel = rfg.label || 'No data';
+  const rfgEmoji = rfg.emoji || '⚪';
+  const rfgScoreEl  = document.getElementById('rfg-score-num');
+  const rfgLabelEl  = document.getElementById('rfg-label');
+  const rfgNeedleEl = document.getElementById('rfg-needle');
+  if (rfgScoreEl) rfgScoreEl.textContent = rfgScore != null ? rfgScore : '—';
+  if (rfgLabelEl) {
+    rfgLabelEl.textContent = rfgEmoji + ' ' + rfgLabel;
+    const col = rfgScore == null ? '#64748b' : rfgScore < 20 ? '#ef4444' : rfgScore < 35 ? '#f97316'
+              : rfgScore < 50 ? '#eab308' : rfgScore < 65 ? '#64748b' : rfgScore < 80 ? '#10b981' : '#34d399';
+    rfgLabelEl.style.color = col;
+  }
+  if (rfgNeedleEl && rfgScore != null) {
+    rfgNeedleEl.setAttribute('transform', `rotate(${(rfgScore / 100) * 180 - 90}, 90, 90)`);
+  }
+
+  // ── Hermes Senti-meter gauge ──────────────────────────────────────────────
   const score = fg.score != null ? parseInt(fg.score) : null;
   const label = fg.label || 'No data';
   const emoji = fg.emoji || '⚪';

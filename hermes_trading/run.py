@@ -18,6 +18,7 @@ import yaml
 from datetime import datetime, timezone
 from pathlib import Path
 import os
+import json as _json_mod  # noqa — used for alternative.me cache
 
 STATE_DIR    = Path(os.getenv("STATE_DIR", Path(__file__).parent.parent / "state"))
 DEFAULTS_DIR = Path(__file__).parent.parent / "state_defaults"
@@ -203,6 +204,35 @@ async def run_all(universe: list[str], total_capital: float, force_pairs: list[s
         active_pairs = list(loops.keys())
         print(f"[coordinator] active pairs: {active_pairs} | regime: {regime_info.get('label','?')}", flush=True)
 
+    # ── alternative.me Fear & Greed (real index, 10-min cache) ─────────────
+    _altme_cache: dict = {}
+
+    async def _fetch_real_fear_greed() -> dict | None:
+        """Fetch the industry-standard Fear & Greed index from alternative.me (free, no key)."""
+        import time as _t
+        if _altme_cache.get("expires", 0) > _t.time():
+            return _altme_cache.get("data")
+        try:
+            import aiohttp
+            async with aiohttp.ClientSession() as s:
+                async with s.get(
+                    "https://api.alternative.me/fng/?limit=1",
+                    timeout=aiohttp.ClientTimeout(total=8),
+                ) as r:
+                    raw = await r.json(content_type=None)
+            entry = raw["data"][0]
+            score = int(entry["value"])
+            label = entry["value_classification"]
+            emoji = ("😱" if score < 20 else "😰" if score < 35
+                     else "😐" if score < 50 else "😊" if score < 65
+                     else "🤑" if score < 80 else "🚀")
+            result = {"score": score, "label": label, "emoji": emoji}
+            _altme_cache["data"]    = result
+            _altme_cache["expires"] = _t.time() + 600   # 10-min cache
+            return result
+        except Exception:
+            return _altme_cache.get("data")   # serve stale on error
+
     async def coordinator_loop():
         import json as _json
         from hermes_trading import black_swan as bs
@@ -239,11 +269,12 @@ async def run_all(universe: list[str], total_capital: float, force_pairs: list[s
                     pass
             return items
 
-        def _write_sentiment(fg: dict, swan: dict):
+        def _write_sentiment(fg: dict, swan: dict, real_fg: dict | None = None):
             sf = STATE_DIR / "sentiment.json"
             try:
                 sf.write_text(_json.dumps({
                     "fear_greed": fg,
+                    "real_fear_greed": real_fg,
                     "black_swan": {
                         "level":   swan["level"],
                         "events":  swan["events"],
@@ -297,7 +328,8 @@ async def run_all(universe: list[str], total_capital: float, force_pairs: list[s
                                 _prev_prices[asset] = md["price"]
                                 _prev_prices[pair]  = md["price"]
 
-                        _write_sentiment(fg_score, swan)
+                        real_fg = await _fetch_real_fear_greed()
+                        _write_sentiment(fg_score, swan, real_fg)
 
                         score_lbl = f"{fg_score['emoji']} {fg_score['label']} {fg_score['score']}/100"
                         print(f"[sentinel] {score_lbl} | {swan['level'].upper()}: {swan['action']}", flush=True)
