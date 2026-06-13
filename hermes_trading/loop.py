@@ -1206,6 +1206,38 @@ class TradingLoop:
                 new_direction = None
 
             # ------------------------------------------------------------------
+            # NEWS caution layer — adjusts MTF requirement based on news sentiment
+            # News is a tiebreaker, not a hard gate:
+            #   Headwind (bearish news + long, or bullish news + short) → +1 HTF required
+            #   Tailwind (bullish news + long, or bearish news + short) → -1 HTF required
+            # Exception: market has already priced the news if RSI is at extremes
+            # AND BB is expanding — in that case news adjustment is ignored.
+            # Session window also overrides (move already happened at open).
+            # ------------------------------------------------------------------
+            if new_direction and pair_news:
+                news_label    = pair_news.get("label", "no_data")
+                rsi_extreme   = (new_direction == "long"  and rsi_15m < 32) or \
+                                (new_direction == "short" and rsi_15m > 68)
+                market_priced = rsi_extreme and bb["expanding"]
+
+                if not market_priced and not in_session_window and news_label != "no_data":
+                    is_headwind = (new_direction == "long"  and news_label == "bearish") or \
+                                  (new_direction == "short" and news_label == "bullish")
+                    is_tailwind = (new_direction == "long"  and news_label == "bullish") or \
+                                  (new_direction == "short" and news_label == "bearish")
+
+                    if is_headwind:
+                        mtf_require = mtf_require + 1
+                        print(f"  [NEWS] {self.asset} {new_direction.upper()} — "
+                              f"{news_label} news headwind, MTF raised to {mtf_require}",
+                              flush=True)
+                    elif is_tailwind:
+                        mtf_require = max(0, mtf_require - 1)
+                        print(f"  [NEWS] {self.asset} {new_direction.upper()} — "
+                              f"{news_label} news tailwind, MTF lowered to {mtf_require}",
+                              flush=True)
+
+            # ------------------------------------------------------------------
             # MTF soft gate — require ≥N HTF confirmations before entering
             # Exceptions: manual entries and liquidity grabs bypass the gate
             # (high-conviction price-action signals are self-confirming)
@@ -1277,6 +1309,8 @@ class TradingLoop:
                     "htf_signals":        htf_reasons,
                     "lq_grab":            lq_note or None,
                     "session_breakout":   active_session["name"] if in_session_window else None,
+                    "news_label":         pair_news.get("label", "no_data") if pair_news else "no_data",
+                    "news_sentiment":     pair_news.get("sentiment", 0.0)   if pair_news else 0.0,
                     "strategy_version":   strategy.get("version", "unknown"),
                     "mode":               "live" if is_live() else "paper",
                 }
