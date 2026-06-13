@@ -1320,8 +1320,8 @@ function renderSentiment(sentiment, data) {
     const scoreTrigger = totalScore == null ? ''
       : totalScore <= 10  ? '🚨 CRITICAL — all entries halted'
       : totalScore <= 18  ? '⚠️ WARNING — advisory banner shown'
-      : totalScore >= 93  ? '⚠️ WARNING — extreme greed, reversal risk'
-      : totalScore >= 85  ? '⚠️ Greed warning threshold'
+      : totalScore >= 93  ? '⚠️ WARNING — extreme bullish, reversal risk'
+      : totalScore >= 85  ? '⚠️ Bullish warning threshold'
       : '✅ Normal — no triggers active';
 
     // MACD breadth — build per-pair data for clickable chips
@@ -1400,7 +1400,7 @@ function renderSentiment(sentiment, data) {
         <span class="text-slate-500 text-xs">${scoreTrigger}</span>
         <span class="font-bold text-lg font-mono" style="color:${scoreColor}">${totalScore != null ? totalScore + '/100' : '—'}</span>
       </div>
-      <p class="text-slate-600 text-xs mt-1">Thresholds: ≤10 critical halt · ≤18 warning · ≥85 greed warning · ≥93 extreme greed warning</p>
+      <p class="text-slate-600 text-xs mt-1">Thresholds: ≤10 critical halt · ≤18 bearish warning · ≥85 bullish warning · ≥93 extreme bullish warning</p>
     </div>`;
   }
 
