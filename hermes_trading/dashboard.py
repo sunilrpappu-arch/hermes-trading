@@ -1048,33 +1048,54 @@ function renderSentiment(sentiment) {
   }
 
   // ── Macro signals grid ────────────────────────────────────────────────────
+  // Each signal has an optional chart link — clicking opens TradingView in the chart panel.
   const macroEl = document.getElementById('macro-signals-grid');
   if (macroEl && fg.components) {
     const c = fg.components;
+    // Source: all signals are computed from the active pairs' 15m heartbeat data,
+    // except BTC Vol which comes from BTC/USDT 1H candles via volatility.py.
     const macroItems = [
-      { label: 'Avg RSI',        value: c.avg_rsi != null ? c.avg_rsi.toFixed(1) : '—',
-        note: c.avg_rsi < 35 ? 'Oversold 😱' : c.avg_rsi > 65 ? 'Overbought 🤑' : 'Neutral',
-        color: c.avg_rsi < 35 ? '#ef4444' : c.avg_rsi > 65 ? '#34d399' : '#64748b' },
-      { label: 'Above 50MA',     value: c.pct_above_ma != null ? c.pct_above_ma.toFixed(0) + '%' : '—',
-        note: c.pct_above_ma < 30 ? 'Mostly bear' : c.pct_above_ma > 70 ? 'Mostly bull' : 'Mixed',
-        color: c.pct_above_ma < 30 ? '#ef4444' : c.pct_above_ma > 70 ? '#34d399' : '#64748b' },
-      { label: 'Above VWAP',     value: c.pct_above_vwap != null ? c.pct_above_vwap.toFixed(0) + '%' : '—',
-        note: c.pct_above_vwap < 30 ? 'Below VWAP' : c.pct_above_vwap > 70 ? 'Above VWAP' : 'Split',
-        color: c.pct_above_vwap < 30 ? '#ef4444' : c.pct_above_vwap > 70 ? '#34d399' : '#64748b' },
-      { label: 'BTC Vol',        value: c.btc_vol_pct != null ? c.btc_vol_pct.toFixed(2) + '%' : '—',
-        note: c.btc_vol_pct > 3 ? 'High — fear' : c.btc_vol_pct < 1 ? 'Low — calm' : 'Normal',
-        color: c.btc_vol_pct > 3 ? '#ef4444' : c.btc_vol_pct < 1 ? '#34d399' : '#64748b' },
-      { label: 'Range Position', value: c.avg_rng_pos != null ? (c.avg_rng_pos*100).toFixed(0) + '%' : '—',
-        note: c.avg_rng_pos < 0.3 ? 'Near bottom' : c.avg_rng_pos > 0.7 ? 'Near top' : 'Mid range',
-        color: c.avg_rng_pos < 0.3 ? '#ef4444' : c.avg_rng_pos > 0.7 ? '#34d399' : '#64748b' },
-      { label: 'F/G Score Pts',
-        value: c.rsi_score != null ? `RSI:${c.rsi_score.toFixed(0)} MA:${c.ma_score.toFixed(0)} VWAP:${c.vwap_score.toFixed(0)}` : '—',
-        note: `Vol:${(c.vol_score||0).toFixed(0)} Mom:${(c.mom_score||0).toFixed(0)}`,
-        color: '#64748b' },
+      { label: 'Avg RSI (15m)',
+        value: c.avg_rsi != null ? c.avg_rsi.toFixed(1) : '—',
+        note: c.avg_rsi < 35 ? 'Oversold — entry zone' : c.avg_rsi > 65 ? 'Overbought — caution' : 'Neutral',
+        tip: '15m RSI averaged across all active pairs. Score: 30pts max. RSI 25→0pts, RSI 75→30pts.',
+        color: c.avg_rsi < 35 ? '#ef4444' : c.avg_rsi > 65 ? '#34d399' : '#64748b',
+        pair: 'BTCUSDT' },
+      { label: '% Pairs above 50MA',
+        value: c.pct_above_ma != null ? c.pct_above_ma.toFixed(0) + '%' : '—',
+        note: c.pct_above_ma < 30 ? 'Mostly bearish' : c.pct_above_ma > 70 ? 'Mostly bullish' : 'Mixed',
+        tip: '% of active pairs whose price is above their 50-period MA on 15m. Score: 25pts max.',
+        color: c.pct_above_ma < 30 ? '#ef4444' : c.pct_above_ma > 70 ? '#34d399' : '#64748b',
+        pair: 'BTCUSDT' },
+      { label: '% Pairs above VWAP',
+        value: c.pct_above_vwap != null ? c.pct_above_vwap.toFixed(0) + '%' : '—',
+        note: c.pct_above_vwap < 30 ? 'Below VWAP — bearish' : c.pct_above_vwap > 70 ? 'Above VWAP — bullish' : 'Split',
+        tip: 'VWAP = Volume Weighted Average Price (intraday anchor). % of pairs trading above it. Score: 20pts max.',
+        color: c.pct_above_vwap < 30 ? '#ef4444' : c.pct_above_vwap > 70 ? '#34d399' : '#64748b',
+        pair: 'BTCUSDT' },
+      { label: 'BTC Realised Vol (1H)',
+        value: c.btc_vol_pct != null ? c.btc_vol_pct.toFixed(2) + '%' : '—',
+        note: c.btc_vol_pct > 3 ? 'High vol — fear / panic' : c.btc_vol_pct < 1 ? 'Low vol — calm / greed' : 'Normal',
+        tip: 'BTC 1H realised volatility. High vol = fear (panic selling). Low vol = greed (calm bull). Score: 15pts max (inverted).',
+        color: c.btc_vol_pct > 3 ? '#ef4444' : c.btc_vol_pct < 1 ? '#34d399' : '#64748b',
+        pair: 'BTCUSDT' },
+      { label: 'Price Momentum',
+        value: c.avg_rng_pos != null ? (c.avg_rng_pos*100).toFixed(0) + '%' : '—',
+        note: c.avg_rng_pos < 0.3 ? 'Near 20-bar low — fear' : c.avg_rng_pos > 0.7 ? 'Near 20-bar high — greed' : 'Mid range',
+        tip: 'Where price sits within its recent 20-bar high/low range across all pairs. 0% = at lows, 100% = at highs. Score: 10pts max.',
+        color: c.avg_rng_pos < 0.3 ? '#ef4444' : c.avg_rng_pos > 0.7 ? '#34d399' : '#64748b',
+        pair: 'BTCUSDT' },
+      { label: 'Score Breakdown',
+        value: c.rsi_score != null ? `RSI ${c.rsi_score.toFixed(0)} · MA ${c.ma_score.toFixed(0)} · VWAP ${c.vwap_score.toFixed(0)}` : '—',
+        note: `Vol ${(c.vol_score||0).toFixed(0)} · Momentum ${(c.mom_score||0).toFixed(0)} · Total /100`,
+        tip: 'Raw point contributions from each of the 5 signals. Max: RSI 30 + MA 25 + VWAP 20 + Vol 15 + Momentum 10 = 100.',
+        color: '#64748b',
+        pair: null },
     ];
     macroEl.innerHTML = macroItems.map(m => `
-      <div class="bg-slate-900 rounded-lg px-3 py-2">
-        <p class="text-slate-500 text-xs mb-0.5">${m.label}</p>
+      <div class="bg-slate-900 rounded-lg px-3 py-2 cursor-default" title="${m.tip}"
+           ${m.pair ? `onclick="loadChart('${m.pair}')" style="cursor:pointer"` : ''}>
+        <p class="text-slate-500 text-xs mb-0.5">${m.label}${m.pair ? ' <span class="text-indigo-500">↗</span>' : ''}</p>
         <p class="font-bold text-sm font-mono" style="color:${m.color}">${m.value}</p>
         <p class="text-slate-600 text-xs">${m.note}</p>
       </div>`).join('');
@@ -1103,13 +1124,13 @@ function renderSentiment(sentiment) {
     banner.style.borderColor   = '#7f1d1d';
     swanIcon.textContent       = '🚨';
     swanTitle.style.color      = '#f87171';
-    swanTitle.textContent      = '🚨 BLACK SWAN — CRITICAL';
+    swanTitle.textContent      = '🚨 BLACK SWAN — CRITICAL (all entries halted)';
   } else {
     banner.style.background    = '#1a1000';
     banner.style.borderColor   = '#78350f';
     swanIcon.textContent       = '⚠️';
     swanTitle.style.color      = '#fbbf24';
-    swanTitle.textContent      = '⚠️ BLACK SWAN — WARNING';
+    swanTitle.textContent      = '⚠️ MARKET WARNING — advisory only, trades not blocked';
   }
 
   const eventTypeLabels = {
