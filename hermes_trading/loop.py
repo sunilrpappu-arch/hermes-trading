@@ -51,6 +51,11 @@ STRATEGY_FILE  = STATE_DIR / "strategy.yaml"
 DD_FILE        = STATE_DIR / "drawdown.json"   # portfolio-level drawdown state
 CONTROLS_FILE  = STATE_DIR / "controls.json"   # manual override commands
 
+# Binance taker fee per leg (configurable via env). Round-trip = 2×.
+COMMISSION_PCT = float(os.getenv("COMMISSION_PCT", "0.001"))   # 0.1% default
+# Estimated slippage per leg for live orders (0 for paper).
+SLIPPAGE_PCT   = float(os.getenv("SLIPPAGE_PCT",   "0.0005"))  # 0.05% default
+
 
 # ---------------------------------------------------------------------------
 # Controls helpers (manual override from dashboard)
@@ -393,6 +398,13 @@ class TradingLoop:
     # ------------------------------------------------------------------
     # Drawdown helpers
     # ------------------------------------------------------------------
+
+    def _trade_costs(self, usdt_deployed: float, leverage: float) -> tuple[float, float]:
+        """Return (commission_usdt, slippage_usdt) for a round-trip trade."""
+        notional       = usdt_deployed * leverage
+        commission     = notional * COMMISSION_PCT * 2          # entry + exit leg
+        slip           = notional * (SLIPPAGE_PCT * 2 if is_live() else 0.0)
+        return round(commission, 6), round(slip, 6)
 
     def _record_pnl(self, pnl_pct: float, usdt_deployed: float, close_reason: str = ""):
         pnl_usdt = pnl_pct * usdt_deployed
@@ -757,12 +769,19 @@ class TradingLoop:
 
                 self._record_pnl(pnl_pct, usdt_deployed, close_reason)
 
+                _commission_usdt, _slippage_usdt = self._trade_costs(usdt_deployed, pos_leverage)
+                _gross_pnl_usdt = round(pnl_pct * usdt_deployed, 4)
+                _net_pnl_usdt   = round(_gross_pnl_usdt - _commission_usdt - _slippage_usdt, 4)
+
                 trade = {
                     **self.open_position,
                     "exit_price":         current_price,
                     "exit_time":          int(time.time()),
                     "pnl_pct":            round(pnl_pct, 6),
-                    "pnl_usdt":           round(pnl_pct * usdt_deployed, 4),
+                    "pnl_usdt":           _gross_pnl_usdt,
+                    "commission_usdt":    _commission_usdt,
+                    "slippage_usdt":      _slippage_usdt,
+                    "net_pnl_usdt":       _net_pnl_usdt,
                     "close_reason":       close_reason,
                     "rsi_at_exit":        round(rsi_15m, 2),
                     "trend_at_exit":      trend,

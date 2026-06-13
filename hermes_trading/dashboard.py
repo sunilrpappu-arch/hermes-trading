@@ -114,25 +114,41 @@ def _trade_pnl_usdt(t: dict) -> float:
 def _portfolio_stats(trades: list[dict]) -> dict:
     if not trades:
         return {"total_trades": 0, "wins": 0, "losses": 0, "win_rate": 0,
-                "total_pnl_usdt": 0.0, "total_pnl_pct": 0.0, "best_trade": None, "worst_trade": None}
+                "total_pnl_usdt": 0.0, "total_pnl_pct": 0.0,
+                "total_commission_usdt": 0.0, "total_slippage_usdt": 0.0,
+                "total_net_pnl_usdt": 0.0, "cost_drag_pct": 0.0,
+                "best_trade": None, "worst_trade": None}
 
     wins   = [t for t in trades if (t.get("pnl_pct") or 0) > 0]
     losses = [t for t in trades if (t.get("pnl_pct") or 0) <= 0]
     total_pnl_usdt = sum(_trade_pnl_usdt(t) for t in trades)
     total_pnl_pct  = sum(t.get("pnl_pct", 0) or 0 for t in trades)
 
+    total_commission = sum(t.get("commission_usdt", 0) or 0 for t in trades)
+    total_slippage   = sum(t.get("slippage_usdt",   0) or 0 for t in trades)
+    total_net_pnl    = sum(
+        t.get("net_pnl_usdt", _trade_pnl_usdt(t)) for t in trades
+    )
+    # Cost drag: what % of gross PnL was eaten by fees + slippage (0 if no gross PnL)
+    cost_drag = ((total_commission + total_slippage) / abs(total_pnl_usdt) * 100
+                 if total_pnl_usdt != 0 else 0.0)
+
     best  = max(trades, key=lambda t: t.get("pnl_pct", 0))
     worst = min(trades, key=lambda t: t.get("pnl_pct", 0))
 
     return {
-        "total_trades":   len(trades),
-        "wins":           len(wins),
-        "losses":         len(losses),
-        "win_rate":       round(len(wins) / len(trades) * 100, 1),
-        "total_pnl_usdt": round(total_pnl_usdt, 4),
-        "total_pnl_pct":  round(total_pnl_pct * 100, 3),
-        "best_trade":     best,
-        "worst_trade":    worst,
+        "total_trades":          len(trades),
+        "wins":                  len(wins),
+        "losses":                len(losses),
+        "win_rate":              round(len(wins) / len(trades) * 100, 1),
+        "total_pnl_usdt":        round(total_pnl_usdt, 4),
+        "total_pnl_pct":         round(total_pnl_pct * 100, 3),
+        "total_commission_usdt": round(total_commission, 4),
+        "total_slippage_usdt":   round(total_slippage, 4),
+        "total_net_pnl_usdt":    round(total_net_pnl, 4),
+        "cost_drag_pct":         round(cost_drag, 1),
+        "best_trade":            best,
+        "worst_trade":           worst,
     }
 
 
@@ -455,15 +471,16 @@ _HTML = r"""<!DOCTYPE html>
 </div>
 
 <!-- Summary cards -->
-<div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+<div class="grid grid-cols-2 md:grid-cols-6 gap-4 mb-6">
   <div class="card">
     <p class="text-slate-400 text-xs mb-1">TOTAL CAPITAL</p>
     <p id="stat-capital" class="text-2xl font-bold text-white">$0</p>
     <p id="stat-capital-deployed" class="text-slate-500 text-xs mt-1">$0 deployed</p>
   </div>
   <div class="card">
-    <p class="text-slate-400 text-xs mb-1">TOTAL PnL</p>
+    <p class="text-slate-400 text-xs mb-1">GROSS PnL</p>
     <p id="stat-pnl" class="text-2xl font-bold">$0.00</p>
+    <p id="stat-net-pnl" class="text-slate-500 text-xs mt-1">net $0.00</p>
   </div>
   <div class="card">
     <p class="text-slate-400 text-xs mb-1">WIN RATE</p>
@@ -476,6 +493,11 @@ _HTML = r"""<!DOCTYPE html>
   <div class="card">
     <p class="text-slate-400 text-xs mb-1">PORTFOLIO DD</p>
     <p id="stat-dd" class="text-2xl font-bold">0%</p>
+  </div>
+  <div class="card">
+    <p class="text-slate-400 text-xs mb-1">FEES + SLIP</p>
+    <p id="stat-costs" class="text-2xl font-bold text-orange-400">$0.00</p>
+    <p id="stat-cost-drag" class="text-slate-500 text-xs mt-1">0% of gross PnL</p>
   </div>
 </div>
 
@@ -652,11 +674,11 @@ _HTML = r"""<!DOCTYPE html>
         <tr>
           <th>Pair</th><th>Dir</th><th>Entry</th><th>Exit</th>
           <th>R:R</th><th>SL</th><th>TP</th>
-          <th>PnL %</th><th>PnL $</th><th>Reason</th><th>Regime</th><th>Time</th>
+          <th>PnL %</th><th>PnL $</th><th>Net $</th><th>Fees</th><th>Reason</th><th>Regime</th><th>Time</th>
         </tr>
       </thead>
       <tbody id="trades-body">
-        <tr><td colspan="12" class="text-center text-slate-500 py-8">No trades yet</td></tr>
+        <tr><td colspan="14" class="text-center text-slate-500 py-8">No trades yet</td></tr>
       </tbody>
     </table>
   </div>
@@ -924,6 +946,8 @@ function _renderTradesPage() {
       <td class="text-xs leading-tight">${tpCell}</td>
       <td>${pnlPct}</td>
       <td>${pnlUsd}</td>
+      <td>${t.net_pnl_usdt != null ? (t.net_pnl_usdt >= 0 ? '<span class="pnl-pos">+$' + Math.abs(t.net_pnl_usdt).toFixed(4) + '</span>' : '<span class="pnl-neg">-$' + Math.abs(t.net_pnl_usdt).toFixed(4) + '</span>') : '<span class="text-slate-500">—</span>'}</td>
+      <td class="text-xs text-orange-400">${t.commission_usdt != null ? '-$' + ((t.commission_usdt||0)+(t.slippage_usdt||0)).toFixed(4) : '—'}</td>
       <td><span class="text-slate-400">${reason}</span>${signal}</td>
       <td><span class="badge ${regimeClass(regime)} text-xs">${regime}</span></td>
       <td class="text-slate-500 text-xs">${dt}</td>
@@ -1145,6 +1169,11 @@ async function refresh() {
     pnlEl.textContent = (p.total_pnl_usdt >= 0 ? '+$' : '-$') + Math.abs(p.total_pnl_usdt).toFixed(4);
     pnlEl.className = 'text-2xl font-bold ' + (p.total_pnl_usdt >= 0 ? 'pnl-pos' : 'pnl-neg');
 
+    // Net PnL (after fees + slippage)
+    const netPnl = p.total_net_pnl_usdt ?? p.total_pnl_usdt;
+    document.getElementById('stat-net-pnl').textContent =
+      'net ' + (netPnl >= 0 ? '+$' : '-$') + Math.abs(netPnl).toFixed(4);
+
     const wrEl = document.getElementById('stat-winrate');
     wrEl.textContent = p.total_trades > 0 ? p.win_rate + '%' : '—';
     wrEl.className = 'text-2xl font-bold ' + (p.win_rate >= 50 ? 'pnl-pos' : 'pnl-neg');
@@ -1156,6 +1185,14 @@ async function refresh() {
     const ddEl = document.getElementById('stat-dd');
     ddEl.textContent = dd.toFixed(2) + '%';
     ddEl.className = 'text-2xl font-bold ' + (dd > 5 ? 'pnl-neg' : 'text-white');
+
+    // Fees + slippage card
+    const totalCosts = (p.total_commission_usdt || 0) + (p.total_slippage_usdt || 0);
+    document.getElementById('stat-costs').textContent = '-$' + totalCosts.toFixed(4);
+    const dragPct = p.cost_drag_pct || 0;
+    document.getElementById('stat-cost-drag').textContent =
+      dragPct.toFixed(1) + '% of gross' +
+      (p.total_commission_usdt ? ' · fees $' + (p.total_commission_usdt||0).toFixed(4) : '');
 
     // Chart
     if (data.cum_pnl?.length) renderPnlChart(data.cum_pnl);
