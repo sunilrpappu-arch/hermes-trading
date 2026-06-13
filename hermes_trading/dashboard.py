@@ -912,8 +912,8 @@ function renderPairs(heartbeats) {
          onclick="loadChart('${asset}')" title="${newsHeadlines.length ? '📰 ' + newsHeadlines.join(' | ') : 'Click to load chart'}">
       <div>
         <span class="font-semibold text-sm text-white">${asset.replace('/USDT','')}/USDT</span>
-        <span class="${posClass} text-xs font-bold ml-2">${posLabel}</span>
         ${newsBadge}
+        <span class="${posClass} text-xs font-bold ml-1">${posLabel}</span>
       </div>
       <div class="text-right text-xs text-slate-400">
         <div>$${parseFloat(hb.price || 0).toFixed(4)}</div>
