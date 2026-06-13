@@ -514,6 +514,23 @@ _HTML = r"""<!DOCTYPE html>
   </div>
 </div>
 
+<!-- Session Window Bar (hidden when no active session) -->
+<div id="session-bar" class="mb-4 rounded-lg px-4 py-2 hidden"
+     style="background:#0f172a;border:1px solid #334155;">
+  <div class="flex items-center justify-between">
+    <div class="flex items-center gap-2">
+      <span id="session-emoji" class="text-lg"></span>
+      <span id="session-label" class="text-slate-200 text-sm font-semibold"></span>
+      <span class="text-slate-500 text-xs">· Session open window active</span>
+    </div>
+    <div class="flex items-center gap-4">
+      <span class="text-slate-400 text-xs">Vol spike: <span id="session-vol" class="text-indigo-300 font-mono"></span>×</span>
+      <span class="text-slate-400 text-xs"><span id="session-mins" class="text-indigo-300 font-mono"></span> min remaining</span>
+      <span id="session-mode" class="text-xs px-2 py-0.5 rounded font-semibold"></span>
+    </div>
+  </div>
+</div>
+
 <!-- Fear/Greed + Macro row -->
 <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
 
@@ -1005,6 +1022,36 @@ function renderPnlChart(points) {
   });
 }
 
+// ── Session window bar ───────────────────────────────────────────────────────
+
+function renderSessionBar(heartbeats) {
+  const bar     = document.getElementById('session-bar');
+  const hbList  = Object.values(heartbeats || {});
+  // Use the first heartbeat that has session data
+  const hb      = hbList.find(h => h.session_name != null) || {};
+  const active  = hb.session_active;
+  const name    = hb.session_name;
+  const emoji   = hb.session_emoji  || '';
+  const mins    = hb.session_mins_left;
+  const vol     = hb.session_vol_mul;
+
+  if (!active || !name) {
+    bar.classList.add('hidden');
+    return;
+  }
+
+  bar.classList.remove('hidden');
+  document.getElementById('session-emoji').textContent  = emoji;
+  document.getElementById('session-label').textContent  = name + ' Open';
+  document.getElementById('session-mins').textContent   = mins  != null ? mins  : '—';
+  document.getElementById('session-vol').textContent    = vol   != null ? vol.toFixed(1) : '—';
+
+  const modeEl = document.getElementById('session-mode');
+  modeEl.textContent        = '⚡ Breakout Mode';
+  modeEl.style.background   = '#1e3a5f';
+  modeEl.style.color        = '#93c5fd';
+}
+
 // ── Fear/Greed + Black Swan rendering ───────────────────────────────────────
 
 function renderSentiment(sentiment, data) {
@@ -1351,6 +1398,9 @@ async function refresh() {
 
     // Fear/Greed + Black Swan
     renderSentiment(data.sentiment || {}, data);
+
+    // Session window bar
+    renderSessionBar(data.heartbeats || {});
 
     // Timestamp
     document.getElementById('last-updated').textContent = new Date().toLocaleTimeString();

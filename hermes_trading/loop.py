@@ -44,6 +44,7 @@ from hermes_trading.indicators import (
 )
 from hermes_trading.adapters.candles import closes as get_closes, highs as get_highs, lows as get_lows
 from hermes_trading.notify import send_trade_email, send_reflection_notification
+from hermes_trading.session_windows import current_session, session_volume_multiplier
 
 STATE_DIR           = Path(os.getenv("STATE_DIR", Path(__file__).parent.parent / "state"))
 TRADES_FILE         = STATE_DIR / "trades.jsonl"
@@ -606,6 +607,14 @@ class TradingLoop:
         mtf_cfg            = strategy.get("mtf", {})
         mtf_require        = int(mtf_cfg.get("require_signals", 1))   # ≥1 HTF signal required
 
+        sb_cfg             = strategy.get("session_breakout", {})
+        sb_enabled         = sb_cfg.get("enabled", True)
+        sb_rsi_relax       = int(sb_cfg.get("rsi_relax_pts", 5))
+        sb_vol_min         = float(sb_cfg.get("volume_spike_min", 1.5))
+        sb_require_bb      = sb_cfg.get("require_bb_expanding", True)
+        sb_min_fg          = float(sb_cfg.get("min_fg_score", 18))
+        sb_max_fg          = float(sb_cfg.get("max_fg_score", 85))
+
         sw_cfg            = strategy.get("sideways", {})
         sw_entry_pct      = sw_cfg.get("range_entry_pct", 0.20)
         sw_or_bars        = sw_cfg.get("or_bars",         4)
@@ -692,6 +701,18 @@ class TradingLoop:
         _macd_empty = {"macd": 0, "signal": 0, "histogram": 0,
                        "crossover_bullish": False, "crossover_bearish": False}
         macd_15m = compute_macd(c15m) if len(c15m) >= 35 else _macd_empty
+
+        # Session breakout detection
+        active_session  = current_session()                             # None or {name, emoji, minutes_remaining}
+        session_vol_mul = session_volume_multiplier(candles_15m_raw)   # ratio vs 24h avg
+        fg_score        = (market_data or {}).get("fear_greed", {}).get("score") if market_data else None
+        in_session_window = (
+            sb_enabled
+            and active_session is not None
+            and session_vol_mul >= sb_vol_min
+            and (not sb_require_bb or bb["expanding"])
+            and (fg_score is None or sb_min_fg <= fg_score <= sb_max_fg)
+        )
 
         # VWAP on 15m candles (intraday, resets at UTC midnight)
         # price_above → bullish intraday bias; band touches → precision entry/exit levels
@@ -978,6 +999,8 @@ class TradingLoop:
                         _pair_thr     = pair_thresholds.get(self.asset, {})
                         bull_long_thr = _pair_thr.get("long_threshold",
                                             bull_cfg.get("long_threshold", 35))
+                        if in_session_window:
+                            bull_long_thr = min(45, bull_long_thr + sb_rsi_relax)
                         # 1. Breakout long — confirmed by bull marubozu or engulfing
                         if bo["breakout"] and trend == "uptrend" and not cs["bear_marubozu"]:
                             lq_note        = f"breakout(res={bo['resistance']:.6g}){cs_bull_str}"
@@ -1008,6 +1031,8 @@ class TradingLoop:
                         _pair_thr      = pair_thresholds.get(self.asset, {})
                         bear_short_thr = _pair_thr.get("short_threshold",
                                              bear_cfg.get("short_threshold", 60))
+                        if in_session_window:
+                            bear_short_thr = max(55, bear_short_thr - sb_rsi_relax)
                         # 1. Breakdown short — confirmed by bear marubozu or engulfing
                         if bo["breakdown"] and trend == "downtrend" and not cs["bull_marubozu"]:
                             lq_note        = f"breakdown(sup={bo['support']:.6g}){cs_bear_str}"
@@ -1151,7 +1176,8 @@ class TradingLoop:
             if new_direction and mtf_require > 0:
                 is_manual  = lq_note == "manual_entry"
                 is_lq      = lq_note and "lq_grab" in lq_note
-                if not is_manual and not is_lq:
+                is_session = in_session_window   # BB expansion + volume spike already confirmed
+                if not is_manual and not is_lq and not is_session:
                     if len(htf_reasons) < mtf_require:
                         print(
                             f"  [MTF GATE] {self.asset} {new_direction.upper()} blocked — "
@@ -1198,6 +1224,7 @@ class TradingLoop:
                     "range_low":          round(rng_low,  6) if rng_low  else None,
                     "htf_signals":        htf_reasons,
                     "lq_grab":            lq_note or None,
+                    "session_breakout":   active_session["name"] if in_session_window else None,
                     "strategy_version":   strategy.get("version", "unknown"),
                     "mode":               "live" if is_live() else "paper",
                 }
@@ -1253,6 +1280,12 @@ class TradingLoop:
             "macd_hist_15m":      round(macd_15m["histogram"], 6) if macd_15m and macd_15m.get("histogram") is not None else None,
             "macd_bull_15m":      macd_15m.get("crossover_bullish",  False) if macd_15m else False,
             "macd_bear_15m":      macd_15m.get("crossover_bearish",  False) if macd_15m else False,
+            # Session breakout
+            "session_name":       active_session["name"]              if active_session else None,
+            "session_emoji":      active_session["emoji"]             if active_session else None,
+            "session_mins_left":  active_session["minutes_remaining"] if active_session else None,
+            "session_vol_mul":    session_vol_mul,
+            "session_active":     in_session_window,
             # VWAP (Step 3 — intraday institutional anchor)
             "vwap":          vwap_15m["vwap"]          if vwap_15m else None,
             "vwap_upper_1":  vwap_15m["upper_1"]       if vwap_15m else None,
