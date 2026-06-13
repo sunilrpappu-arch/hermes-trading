@@ -45,6 +45,10 @@ from hermes_trading.indicators import (
 from hermes_trading.adapters.candles import closes as get_closes, highs as get_highs, lows as get_lows
 from hermes_trading.notify import send_trade_email, send_reflection_notification
 from hermes_trading.session_windows import current_session, session_volume_multiplier
+from hermes_trading.downtime import (
+    should_run_downtime, run_downtime,
+    record_shadow_trade, resolve_shadow_trades,
+)
 
 STATE_DIR           = Path(os.getenv("STATE_DIR", Path(__file__).parent.parent / "state"))
 TRADES_FILE         = STATE_DIR / "trades.jsonl"
@@ -370,6 +374,32 @@ async def _run_self_improvement(all_trades: list[dict], strategy_keys: list[str]
 
     except Exception as e:
         print(f"[self_improve] Cycle failed: {e}", flush=True)
+
+
+async def _run_downtime_check(all_trades: list[dict]):
+    """
+    Fires when the system has been idle for IDLE_THRESHOLD_HOURS.
+    Runs idle diagnosis, OOS backtest, and shadow trade evaluation.
+    """
+    try:
+        strategy     = load_strategy()
+        heartbeats   = {}
+        active_pairs = []
+        for hb_file in STATE_DIR.glob("heartbeat_*.json"):
+            try:
+                hb = json.loads(hb_file.read_text())
+                if hb.get("asset"):
+                    heartbeats[hb["asset"]] = hb
+                    active_pairs.append(hb["asset"])
+            except Exception:
+                pass
+
+        print(f"[downtime] Starting downtime analysis — idle, {len(all_trades)} total trades", flush=True)
+        msg = await run_downtime(all_trades, strategy, active_pairs, heartbeats)
+        if msg:
+            send_reflection_notification(msg)
+    except Exception as e:
+        print(f"[downtime] Failed: {e}", flush=True)
 
 
 def load_pair_thresholds() -> dict:
@@ -1133,6 +1163,9 @@ class TradingLoop:
                     print(f"  [LEVELS] {self.asset} level calc failed: {_lv_err}", flush=True)
                     _dyn_levels = None
 
+            # Capture pre-gate direction for shadow trade logging
+            _pre_gate_direction = new_direction
+
             # ------------------------------------------------------------------
             # STEP 3a: BB squeeze gate
             # If bands are in a tight squeeze with NO expansion yet — skip.
@@ -1186,6 +1219,21 @@ class TradingLoop:
                             flush=True,
                         )
                         new_direction = None   # block entry
+
+            # Shadow trade: if a valid setup existed but was blocked by a gate,
+            # log what would have been entered so we can track its forward outcome.
+            if not new_direction and _pre_gate_direction and _dyn_levels and _dyn_levels.get("valid"):
+                try:
+                    record_shadow_trade(
+                        asset       = self.asset,
+                        direction   = _pre_gate_direction,
+                        entry_price = current_price,
+                        sl_price    = _dyn_levels["sl_price"],
+                        tp_price    = _dyn_levels["tp_price"],
+                        signal      = lq_note or "signal",
+                    )
+                except Exception:
+                    pass
 
             if new_direction:
                 if is_live():
@@ -1339,6 +1387,37 @@ class TradingLoop:
             f"pos={pos_tag}{stop_tag}{cooldown_tag}",
             flush=True,
         )
+
+        # Shadow resolution + downtime trigger (self-throttled, non-blocking)
+        try:
+            all_trades_maint = []
+            if TRADES_FILE.exists():
+                for line in TRADES_FILE.read_text().splitlines():
+                    if line.strip():
+                        import json as _j
+                        all_trades_maint.append(_j.loads(line))
+        except Exception:
+            all_trades_maint = []
+        self._tick_maintenance(current_price, all_trades_maint)
+
+    # ------------------------------------------------------------------
+    # Downtime + shadow trade maintenance (called each tick, self-throttled)
+    # ------------------------------------------------------------------
+
+    def _tick_maintenance(self, current_price: float, all_trades: list[dict]):
+        """Lightweight per-tick work: resolve shadow trades, trigger downtime check."""
+        # Resolve any shadow trades that hit TP/SL
+        try:
+            resolve_shadow_trades({self.asset: current_price})
+        except Exception:
+            pass
+
+        # Downtime check: fires at most once per IDLE_THRESHOLD_HOURS, async
+        try:
+            if should_run_downtime(all_trades):
+                asyncio.create_task(_run_downtime_check(all_trades))
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Run loop

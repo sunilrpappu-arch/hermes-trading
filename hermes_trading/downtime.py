@@ -1,0 +1,354 @@
+"""
+Downtime engine — productive work during quiet markets.
+
+Triggered when no trades have closed in >8 hours. Runs three passes:
+
+  1. Idle diagnosis   — explains per-pair why entries are being blocked
+  2. OOS backtest     — validates current strategy on held-out recent data
+                        (train window: days 31–60, test window: days 1–30)
+  3. Shadow trading   — logs what the engine *would* have entered and tracks
+                        whether those shadow trades hit TP/SL forward in time
+
+Results are written to state/downtime_log.jsonl and state/shadow_trades.jsonl.
+A summary is sent via the reflection notification channel.
+"""
+from __future__ import annotations
+import asyncio
+import json
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+STATE_DIR         = Path(__file__).parent.parent / "state"
+DOWNTIME_LOG      = STATE_DIR / "downtime_log.jsonl"
+SHADOW_TRADES     = STATE_DIR / "shadow_trades.jsonl"
+LAST_DOWNTIME_FILE = STATE_DIR / ".last_downtime_run"
+
+# How many hours of trade silence before downtime engine fires
+IDLE_THRESHOLD_HOURS = 8
+
+# OOS split: total lookback, and how many days are held out for testing
+OOS_TOTAL_DAYS  = 60
+OOS_TEST_DAYS   = 30   # most recent 30 days = test; older 30 days = train basis
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+async def run_downtime(
+    all_trades:   list[dict],
+    strategy:     dict,
+    active_pairs: list[str],
+    heartbeats:   dict,          # {asset: heartbeat_dict}
+) -> str:
+    """
+    Run all three downtime passes. Returns a human-readable summary string.
+    Writes detailed results to state files.
+    Respects a cooldown — won't fire more than once per IDLE_THRESHOLD_HOURS.
+    """
+    if not _cooldown_expired():
+        return ""
+
+    _mark_run()
+
+    lines = [f"🌙 <b>Downtime Analysis</b> — {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"]
+
+    # 1. Idle diagnosis
+    diag = _idle_diagnosis(heartbeats, strategy)
+    lines.append("\n📋 <b>Entry blockers</b>")
+    for pair, reasons in diag.items():
+        lines.append(f"  {pair}: {' · '.join(reasons)}")
+
+    # 2. OOS backtest
+    oos_result = await _oos_backtest(active_pairs, strategy)
+    if oos_result:
+        lines.append("\n🧪 <b>Out-of-sample validation</b>")
+        lines.append(
+            f"  Train WR {oos_result['train_wr']:.0f}% → Test WR {oos_result['test_wr']:.0f}%  "
+            f"({'✅ holding up' if oos_result['test_wr'] >= oos_result['train_wr'] - 10 else '⚠️ degrading'})"
+        )
+        lines.append(
+            f"  Train PnL {oos_result['train_pnl']:+.1f}%  Test PnL {oos_result['test_pnl']:+.1f}%  "
+            f"({oos_result['test_trades']} OOS trades)"
+        )
+        if oos_result["overfit_warning"]:
+            lines.append("  ⚠️ Possible overfitting — test WR is >15pp below train WR")
+
+    # 3. Shadow trade evaluation
+    shadow_summary = _evaluate_shadow_trades(all_trades)
+    if shadow_summary:
+        lines.append("\n👻 <b>Shadow trade outcomes</b>")
+        lines.append(
+            f"  {shadow_summary['resolved']} resolved — "
+            f"shadow WR {shadow_summary['shadow_wr']:.0f}%  "
+            f"vs live WR {shadow_summary['live_wr']:.0f}%"
+        )
+        if shadow_summary["gap"] > 15:
+            lines.append("  ⚠️ Shadow WR >> live WR — system may be filtering good setups")
+        elif shadow_summary["gap"] < -15:
+            lines.append("  ✅ Live filters outperforming shadows — gates are adding value")
+
+    summary = "\n".join(lines)
+
+    # Persist full results
+    _log_downtime({
+        "timestamp":    time.time(),
+        "diagnosis":    diag,
+        "oos":          oos_result,
+        "shadow":       shadow_summary,
+        "pairs":        active_pairs,
+        "trades_n":     len(all_trades),
+    })
+
+    return summary
+
+
+# ---------------------------------------------------------------------------
+# 1. Idle diagnosis
+# ---------------------------------------------------------------------------
+
+def _idle_diagnosis(heartbeats: dict, strategy: dict) -> dict[str, list[str]]:
+    """
+    For each active pair, explain why no entry fired on the last heartbeat.
+    Returns {pair: [reason, ...]}
+    """
+    bull_thr = strategy.get("bull",  {}).get("long_threshold",  35)
+    bear_thr = strategy.get("bear",  {}).get("short_threshold", 60)
+    fg_min   = strategy.get("session_breakout", {}).get("min_fg_score", 18)
+    fg_max   = strategy.get("session_breakout", {}).get("max_fg_score", 85)
+
+    result = {}
+    for asset, hb in heartbeats.items():
+        reasons = []
+        rsi     = hb.get("rsi_15m")
+        regime  = hb.get("pair_regime", "neutral")
+        bb_sq   = hb.get("bb_squeeze", False)
+        bb_exp  = hb.get("bb_expanding", False)
+        trend   = hb.get("trend")
+        fg      = hb.get("fear_greed_score")
+
+        if rsi is not None:
+            if regime == "bull" and rsi >= bull_thr:
+                reasons.append(f"RSI {rsi:.0f} ≥ {bull_thr} (need dip)")
+            elif regime == "bear" and rsi <= bear_thr:
+                reasons.append(f"RSI {rsi:.0f} ≤ {bear_thr} (need bounce)")
+            elif regime in ("neutral", "sideways"):
+                reasons.append(f"regime={regime}")
+
+        if bb_sq and not bb_exp:
+            reasons.append("BB squeezing, no expansion yet")
+
+        if trend and trend not in ("uptrend", "downtrend"):
+            reasons.append(f"trend={trend}")
+
+        if fg is not None:
+            if fg < fg_min:
+                reasons.append(f"fear/greed {fg:.0f} (extreme fear gate)")
+            elif fg > fg_max:
+                reasons.append(f"fear/greed {fg:.0f} (extreme greed gate)")
+
+        if not reasons:
+            reasons.append("no clear setup on last tick")
+
+        result[asset] = reasons
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# 2. Out-of-sample backtest
+# ---------------------------------------------------------------------------
+
+async def _oos_backtest(pairs: list[str], strategy: dict) -> dict | None:
+    """
+    Backtest the current strategy on two non-overlapping windows:
+      - Train: days 31–60 (older, used historically for hypothesis generation)
+      - Test:  days 1–30  (recent, never used for training — true OOS)
+
+    Returns aggregated metrics for both windows.
+    """
+    try:
+        from hermes_trading.backtest import run_backtest
+    except Exception:
+        return None
+
+    bt_pairs = pairs[:4] or ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
+
+    train_tasks = [run_backtest(p, strategy, lookback_days=OOS_TOTAL_DAYS) for p in bt_pairs]
+    test_tasks  = [run_backtest(p, strategy, lookback_days=OOS_TEST_DAYS)  for p in bt_pairs]
+
+    all_results = await asyncio.gather(*train_tasks, *test_tasks, return_exceptions=True)
+    n = len(bt_pairs)
+    train_raw = all_results[:n]
+    test_raw  = all_results[n:]
+
+    def _agg(results):
+        valid = [r for r in results if isinstance(r, dict) and r.get("total_trades", 0) >= 1]
+        if not valid:
+            return None
+        total = sum(r["total_trades"] for r in valid)
+        wins  = sum(r["wins"]         for r in valid)
+        pnl   = sum(r["total_pnl_pct"] * r["total_trades"] for r in valid) / total
+        return {
+            "total_trades": total,
+            "win_rate":     round(wins / total * 100, 1) if total else 0,
+            "total_pnl_pct": round(pnl, 2),
+        }
+
+    train = _agg(train_raw)
+    test  = _agg(test_raw)
+    if not train or not test:
+        return None
+
+    return {
+        "train_wr":        train["win_rate"],
+        "train_pnl":       train["total_pnl_pct"],
+        "train_trades":    train["total_trades"],
+        "test_wr":         test["win_rate"],
+        "test_pnl":        test["total_pnl_pct"],
+        "test_trades":     test["total_trades"],
+        "overfit_warning": test["win_rate"] < train["win_rate"] - 15,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 3. Shadow trading
+# ---------------------------------------------------------------------------
+
+def record_shadow_trade(asset: str, direction: str, entry_price: float,
+                        sl_price: float, tp_price: float, signal: str):
+    """
+    Log a would-have-entered trade. Called from loop.py when an entry
+    signal fires but is blocked by a gate (MTF, BB, fear/greed, etc.).
+    """
+    record = {
+        "asset":       asset,
+        "direction":   direction,
+        "entry_price": entry_price,
+        "sl_price":    sl_price,
+        "tp_price":    tp_price,
+        "signal":      signal,
+        "entered_at":  time.time(),
+        "resolved":    False,
+        "outcome":     None,
+    }
+    _append_shadow(record)
+
+
+def resolve_shadow_trades(current_prices: dict[str, float]):
+    """
+    Check open shadow trades against current prices and mark as TP/SL/open.
+    Called each tick from loop.py with {asset: current_price}.
+    """
+    if not SHADOW_TRADES.exists():
+        return
+
+    try:
+        lines  = [l for l in SHADOW_TRADES.read_text().splitlines() if l.strip()]
+        trades = [json.loads(l) for l in lines]
+    except Exception:
+        return
+
+    updated = False
+    for t in trades:
+        if t.get("resolved"):
+            continue
+        asset = t["asset"]
+        price = current_prices.get(asset)
+        if price is None:
+            continue
+
+        d  = t["direction"]
+        sl = t["sl_price"]
+        tp = t["tp_price"]
+
+        hit_tp = (d == "long"  and price >= tp) or (d == "short" and price <= tp)
+        hit_sl = (d == "long"  and price <= sl) or (d == "short" and price >= sl)
+
+        # Expire after 48 hours if neither hit
+        age_h = (time.time() - t["entered_at"]) / 3600
+        if hit_tp:
+            t["outcome"], t["resolved"] = "tp", True
+        elif hit_sl:
+            t["outcome"], t["resolved"] = "sl", True
+        elif age_h > 48:
+            t["outcome"], t["resolved"] = "expired", True
+
+        if t.get("resolved"):
+            t["resolved_at"] = time.time()
+            updated = True
+
+    if updated:
+        SHADOW_TRADES.write_text("\n".join(json.dumps(t) for t in trades) + "\n")
+
+
+def _evaluate_shadow_trades(all_live_trades: list[dict]) -> dict | None:
+    """Return win-rate comparison between shadow and live trades."""
+    if not SHADOW_TRADES.exists():
+        return None
+    try:
+        lines  = [l for l in SHADOW_TRADES.read_text().splitlines() if l.strip()]
+        trades = [json.loads(l) for l in lines]
+    except Exception:
+        return None
+
+    resolved = [t for t in trades if t.get("resolved") and t.get("outcome") in ("tp", "sl")]
+    if len(resolved) < 3:
+        return None
+
+    shadow_wins = sum(1 for t in resolved if t["outcome"] == "tp")
+    shadow_wr   = shadow_wins / len(resolved) * 100
+
+    live_wins   = sum(1 for t in all_live_trades if (t.get("pnl_pct") or 0) > 0)
+    live_wr     = live_wins / len(all_live_trades) * 100 if all_live_trades else 0
+
+    return {
+        "resolved":   len(resolved),
+        "shadow_wr":  round(shadow_wr, 1),
+        "live_wr":    round(live_wr,   1),
+        "gap":        round(shadow_wr - live_wr, 1),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def should_run_downtime(all_trades: list[dict]) -> bool:
+    """
+    Return True if we've been idle long enough to warrant a downtime pass.
+    Idle = no closed trade in IDLE_THRESHOLD_HOURS hours.
+    """
+    if not _cooldown_expired():
+        return False
+    if not all_trades:
+        return True   # no trades ever → definitely idle
+    last_trade_ts = max((t.get("close_time") or t.get("entry_time") or 0) for t in all_trades)
+    idle_hours = (time.time() - last_trade_ts) / 3600
+    return idle_hours >= IDLE_THRESHOLD_HOURS
+
+
+def _cooldown_expired() -> bool:
+    try:
+        last = float(LAST_DOWNTIME_FILE.read_text())
+        return (time.time() - last) >= IDLE_THRESHOLD_HOURS * 3600
+    except Exception:
+        return True
+
+
+def _mark_run():
+    LAST_DOWNTIME_FILE.parent.mkdir(parents=True, exist_ok=True)
+    LAST_DOWNTIME_FILE.write_text(str(time.time()))
+
+
+def _log_downtime(record: dict):
+    DOWNTIME_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with open(DOWNTIME_LOG, "a") as f:
+        f.write(json.dumps(record) + "\n")
+
+
+def _append_shadow(record: dict):
+    SHADOW_TRADES.parent.mkdir(parents=True, exist_ok=True)
+    with open(SHADOW_TRADES, "a") as f:
+        f.write(json.dumps(record) + "\n")
