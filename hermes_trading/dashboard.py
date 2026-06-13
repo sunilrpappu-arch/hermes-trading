@@ -1113,7 +1113,7 @@ function renderSentiment(sentiment, data) {
       : totalScore >= 85  ? '⚠️ Greed warning threshold'
       : '✅ Normal — no triggers active';
 
-    // MACD breadth card — aggregated from live heartbeat data
+    // MACD breadth — build per-pair data for clickable chips
     const hbList    = Object.values(data.heartbeats || {});
     const macdBull  = hbList.filter(h => h.macd_bull_15m).length;
     const macdBear  = hbList.filter(h => h.macd_bear_15m).length;
@@ -1122,16 +1122,30 @@ function renderSentiment(sentiment, data) {
     const bullPairs = hbList.filter(h => h.macd_hist_15m != null && h.macd_hist_15m > 0).length;
     const bearPairs = hbList.filter(h => h.macd_hist_15m != null && h.macd_hist_15m < 0).length;
     const macdColor = bullPairs > bearPairs ? '#34d399' : bearPairs > bullPairs ? '#ef4444' : '#64748b';
-    const macdCross = macdBull > 0 ? `🟢 ${macdBull} bullish crossover` : macdBear > 0 ? `🔴 ${macdBear} bearish crossover` : 'No crossovers this tick';
-    // Row 3: Price Momentum (already pushed) + MACD
-    macroItems.push({
-      label: 'MACD Breadth (15m)',
-      value: avgHist != null ? (avgHist >= 0 ? '+' : '') + avgHist.toFixed(5) : '—',
-      note:  `${bullPairs}↑ ${bearPairs}↓ pairs · ${macdCross}`,
-      tip:   'MACD histogram averaged across all active pairs on 15m. Positive = bullish momentum building. Crossover = MACD line crossing signal line.',
-      color: macdColor,
-      pair:  'BTC/USDT',
-    });
+    // Per-pair chips: crossovers first, then sorted by histogram magnitude
+    const macdPairs = hbList
+      .filter(h => h.asset && h.macd_hist_15m != null)
+      .sort((a, b) => {
+        const aCross = (a.macd_bull_15m || a.macd_bear_15m) ? 1 : 0;
+        const bCross = (b.macd_bull_15m || b.macd_bear_15m) ? 1 : 0;
+        if (bCross !== aCross) return bCross - aCross;
+        return Math.abs(b.macd_hist_15m) - Math.abs(a.macd_hist_15m);
+      });
+    const pairChips = macdPairs.map(h => {
+      const sym   = (h.asset || '').replace('/USDT','');
+      const cross = h.macd_bull_15m ? '🟢' : h.macd_bear_15m ? '🔴' : (h.macd_hist_15m > 0 ? '↑' : '↓');
+      const col   = h.macd_bull_15m ? '#34d399' : h.macd_bear_15m ? '#ef4444' : (h.macd_hist_15m > 0 ? '#34d399' : '#f87171');
+      return `<span onclick="loadChart('${h.asset}')" title="Load ${sym} chart"
+        style="cursor:pointer;color:${col};background:#1e293b;border-radius:4px;padding:1px 5px;font-size:10px;margin:1px;display:inline-block">
+        ${cross} ${sym}</span>`;
+    }).join('');
+    // MACD card is rendered separately (not via macroItems) so chips are clickable
+    const macdCardHtml = `
+      <div class="bg-slate-900 rounded-lg px-3 py-2">
+        <p class="text-slate-500 text-xs mb-0.5">MACD Breadth (15m)</p>
+        <p class="font-bold text-sm font-mono mb-1" style="color:${macdColor}">${avgHist != null ? (avgHist >= 0 ? '+' : '') + avgHist.toFixed(5) : '—'}</p>
+        <div class="flex flex-wrap gap-0.5">${pairChips || '<span class="text-slate-600 text-xs">No data</span>'}</div>
+      </div>`;
     // Row 4: Total3 + Total2
     macroItems.push({
       label: 'Total3 (alts)',
@@ -1154,13 +1168,17 @@ function renderSentiment(sentiment, data) {
       ? `RSI ${c.rsi_score.toFixed(0)}/30 · MA ${c.ma_score.toFixed(0)}/25 · VWAP ${c.vwap_score.toFixed(0)}/20 · Vol ${(c.vol_score||0).toFixed(0)}/15 · Mom ${(c.mom_score||0).toFixed(0)}/10`
       : '—';
 
-    macroEl.innerHTML = macroItems.filter(Boolean).map(m => `
+    // Insert MACD card after Price Momentum (5th card = index 4), before Total3/Total2
+    const macroCardsList = macroItems.filter(Boolean).map(m => `
       <div class="bg-slate-900 rounded-lg px-3 py-2 cursor-default" title="${m.tip}"
            ${m.pair ? `onclick="loadChart('${m.pair}')" style="cursor:pointer"` : ''}>
         <p class="text-slate-500 text-xs mb-0.5">${m.label}${m.pair ? ' <span class="text-indigo-500">↗</span>' : ''}</p>
         <p class="font-bold text-sm font-mono" style="color:${m.color}">${m.value}</p>
         <p class="text-slate-600 text-xs">${m.note}</p>
-      </div>`).join('') + `
+      </div>`);
+    // Inject MACD card after index 4 (Price Momentum)
+    macroCardsList.splice(5, 0, macdCardHtml);
+    macroEl.innerHTML = macroCardsList.join('') + `
     <div class="col-span-2 bg-slate-900 rounded-lg px-3 py-2 border border-slate-700">
       <p class="text-slate-500 text-xs mb-1">SCORE BREAKDOWN — what each signal contributed</p>
       <p class="font-mono text-xs text-slate-300 mb-1">${breakdown}</p>
