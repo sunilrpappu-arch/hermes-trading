@@ -1007,7 +1007,8 @@ function renderPnlChart(points) {
 
 // ── Fear/Greed + Black Swan rendering ───────────────────────────────────────
 
-function renderSentiment(sentiment) {
+function renderSentiment(sentiment, data) {
+  data = data || {};
   const fg   = sentiment.fear_greed || {};
   const swan = sentiment.black_swan || {};
 
@@ -1054,37 +1055,59 @@ function renderSentiment(sentiment) {
     const c = fg.components;
     // Source: all signals are computed from the active pairs' 15m heartbeat data,
     // except BTC Vol which comes from BTC/USDT 1H candles via volatility.py.
+    // Also pull regime-level macro data (Total2/Total3/BTC.D) from heartbeat
+    const hbs = Object.values(data.heartbeats || {});
+    const regimeInfo = hbs.length ? (hbs[0] || {}) : {};
+    const total2 = regimeInfo.total2_bias || sentiment.total2_bias || '—';
+    const total3 = regimeInfo.total3_bias || sentiment.total3_bias || '—';
+    const altSeason = regimeInfo.alt_season || false;
+    const btcDomRising = regimeInfo.btc_dom_rising || false;
+
+    const biasColor = b => b === 'bullish' ? '#34d399' : b === 'bearish' ? '#ef4444' : '#64748b';
+
     const macroItems = [
       { label: 'Avg RSI (15m)',
         value: c.avg_rsi != null ? c.avg_rsi.toFixed(1) : '—',
         note: c.avg_rsi < 35 ? 'Oversold — entry zone' : c.avg_rsi > 65 ? 'Overbought — caution' : 'Neutral',
         tip: '15m RSI averaged across all active pairs. Score: 30pts max. RSI 25→0pts, RSI 75→30pts.',
         color: c.avg_rsi < 35 ? '#ef4444' : c.avg_rsi > 65 ? '#34d399' : '#64748b',
-        pair: 'BTCUSDT' },
+        pair: 'BTC/USDT' },
       { label: '% Pairs above 50MA',
         value: c.pct_above_ma != null ? c.pct_above_ma.toFixed(0) + '%' : '—',
         note: c.pct_above_ma < 30 ? 'Mostly bearish' : c.pct_above_ma > 70 ? 'Mostly bullish' : 'Mixed',
         tip: '% of active pairs whose price is above their 50-period MA on 15m. Score: 25pts max.',
         color: c.pct_above_ma < 30 ? '#ef4444' : c.pct_above_ma > 70 ? '#34d399' : '#64748b',
-        pair: 'BTCUSDT' },
+        pair: 'BTC/USDT' },
       { label: '% Pairs above VWAP',
         value: c.pct_above_vwap != null ? c.pct_above_vwap.toFixed(0) + '%' : '—',
         note: c.pct_above_vwap < 30 ? 'Below VWAP — bearish' : c.pct_above_vwap > 70 ? 'Above VWAP — bullish' : 'Split',
         tip: 'VWAP = Volume Weighted Average Price (intraday anchor). % of pairs trading above it. Score: 20pts max.',
         color: c.pct_above_vwap < 30 ? '#ef4444' : c.pct_above_vwap > 70 ? '#34d399' : '#64748b',
-        pair: 'BTCUSDT' },
+        pair: 'BTC/USDT' },
       { label: 'BTC Realised Vol (1H)',
         value: c.btc_vol_pct != null ? c.btc_vol_pct.toFixed(2) + '%' : '—',
         note: c.btc_vol_pct > 3 ? 'High vol — fear / panic' : c.btc_vol_pct < 1 ? 'Low vol — calm / greed' : 'Normal',
         tip: 'BTC 1H realised volatility. High vol = fear (panic selling). Low vol = greed (calm bull). Score: 15pts max (inverted).',
         color: c.btc_vol_pct > 3 ? '#ef4444' : c.btc_vol_pct < 1 ? '#34d399' : '#64748b',
-        pair: 'BTCUSDT' },
+        pair: 'BTC/USDT' },
       { label: 'Price Momentum',
         value: c.avg_rng_pos != null ? (c.avg_rng_pos*100).toFixed(0) + '%' : '—',
         note: c.avg_rng_pos < 0.3 ? 'Near 20-bar low — fear' : c.avg_rng_pos > 0.7 ? 'Near 20-bar high — greed' : 'Mid range',
         tip: 'Where price sits within its recent 20-bar high/low range across all pairs. 0% = at lows, 100% = at highs. Score: 10pts max.',
         color: c.avg_rng_pos < 0.3 ? '#ef4444' : c.avg_rng_pos > 0.7 ? '#34d399' : '#64748b',
-        pair: 'BTCUSDT' },
+        pair: 'BTC/USDT' },
+      { label: 'Total2 (ex-BTC)',
+        value: total2 !== '—' ? total2.toUpperCase() : '—',
+        note: altSeason ? '🌟 Alt season active' : 'No alt season',
+        tip: 'Total crypto market cap excluding BTC (ETH+alts). Computed from ETH 1H candles vs BTC dominance. Bullish = alts outperforming.',
+        color: biasColor(total2),
+        pair: 'TOTAL2' },
+      { label: 'Total3 (alts)',
+        value: total3 !== '—' ? total3.toUpperCase() : '—',
+        note: btcDomRising ? 'BTC dominance rising' : 'BTC dom stable/falling',
+        tip: 'SOL + BNB + ADA basket vs BTC. Bullish = small caps outperforming. BTC.D rising = capital flowing back to BTC.',
+        color: biasColor(total3),
+        pair: 'TOTAL3' },
       { label: 'Score Breakdown',
         value: c.rsi_score != null ? `RSI ${c.rsi_score.toFixed(0)} · MA ${c.ma_score.toFixed(0)} · VWAP ${c.vwap_score.toFixed(0)}` : '—',
         note: `Vol ${(c.vol_score||0).toFixed(0)} · Momentum ${(c.mom_score||0).toFixed(0)} · Total /100`,
@@ -1258,7 +1281,7 @@ async function refresh() {
     renderTrades(data.recent_trades || []);
 
     // Fear/Greed + Black Swan
-    renderSentiment(data.sentiment || {});
+    renderSentiment(data.sentiment || {}, data);
 
     // Timestamp
     document.getElementById('last-updated').textContent = new Date().toLocaleTimeString();
@@ -1446,8 +1469,11 @@ let _currentTvSymbol = 'BINANCE:BTCUSDTPERP';
 let _tvWidget = null;
 
 function tvSymbol(asset) {
-  const sym = (asset || 'BTC/USDT').replace('/USDT', '');
-  return `BINANCE:${sym}USDTPERP`;
+  // Handle special index symbols (no exchange prefix, no PERP suffix)
+  const indexSymbols = ['TOTAL', 'TOTAL2', 'TOTAL3', 'BTC.D', 'OTHERS.D'];
+  const clean = (asset || 'BTC/USDT').replace('/USDT', '').replace('USDT', '');
+  if (indexSymbols.includes(clean)) return clean;
+  return `BINANCE:${clean}USDTPERP`;
 }
 
 function loadChart(asset) {
@@ -1461,6 +1487,9 @@ function loadChart(asset) {
   document.getElementById('chart-symbol-label').textContent = (asset || 'BTC/USDT').replace('/USDT', '') + '/USDT';
   document.getElementById('tv-expand-btn').href =
     `https://www.tradingview.com/chart/?symbol=${sym}`;
+
+  // Scroll chart into view
+  document.getElementById('tv-chart-container')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
   // Clear and recreate widget
   const container = document.getElementById('tv-chart-container');
