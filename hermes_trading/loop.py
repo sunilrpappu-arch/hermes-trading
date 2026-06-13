@@ -45,11 +45,12 @@ from hermes_trading.indicators import (
 from hermes_trading.adapters.candles import closes as get_closes, highs as get_highs, lows as get_lows
 from hermes_trading.notify import send_trade_email, send_reflection_notification
 
-STATE_DIR      = Path(os.getenv("STATE_DIR", Path(__file__).parent.parent / "state"))
-TRADES_FILE    = STATE_DIR / "trades.jsonl"
-STRATEGY_FILE  = STATE_DIR / "strategy.yaml"
-DD_FILE        = STATE_DIR / "drawdown.json"   # portfolio-level drawdown state
-CONTROLS_FILE  = STATE_DIR / "controls.json"   # manual override commands
+STATE_DIR           = Path(os.getenv("STATE_DIR", Path(__file__).parent.parent / "state"))
+TRADES_FILE         = STATE_DIR / "trades.jsonl"
+STRATEGY_FILE       = STATE_DIR / "strategy.yaml"
+DD_FILE             = STATE_DIR / "drawdown.json"   # portfolio-level drawdown state
+CONTROLS_FILE       = STATE_DIR / "controls.json"   # manual override commands
+PAIR_THRESHOLDS_FILE = STATE_DIR / "pair_thresholds.json"
 
 # Binance taker fee per leg (configurable via env). Round-trip = 2×.
 COMMISSION_PCT = float(os.getenv("COMMISSION_PCT", "0.001"))   # 0.1% default
@@ -370,6 +371,14 @@ async def _run_self_improvement(all_trades: list[dict], strategy_keys: list[str]
         print(f"[self_improve] Cycle failed: {e}", flush=True)
 
 
+def load_pair_thresholds() -> dict:
+    """Load per-pair RSI threshold overrides written by self_improve."""
+    try:
+        return json.loads(PAIR_THRESHOLDS_FILE.read_text())
+    except Exception:
+        return {}
+
+
 def load_strategy() -> dict:
     if not STRATEGY_FILE.exists():
         STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -576,6 +585,7 @@ class TradingLoop:
 
     async def tick(self, market_data: dict = None):
         strategy        = load_strategy()
+        pair_thresholds = load_pair_thresholds()
         trend_cfg       = strategy.get("trend_filter", {})
         lq_cfg          = strategy.get("liquidity_grab", {})
         dd_cfg          = strategy.get("drawdown", {})
@@ -965,7 +975,9 @@ class TradingLoop:
                     cs_bear_str = f"+cs({','.join(cs['bearish_signals'])})" if cs["bearish_signals"] else ""
 
                     if pair_regime == "bull":
-                        bull_long_thr = bull_cfg.get("long_threshold", 35)
+                        _pair_thr     = pair_thresholds.get(self.asset, {})
+                        bull_long_thr = _pair_thr.get("long_threshold",
+                                            bull_cfg.get("long_threshold", 35))
                         # 1. Breakout long — confirmed by bull marubozu or engulfing
                         if bo["breakout"] and trend == "uptrend" and not cs["bear_marubozu"]:
                             lq_note        = f"breakout(res={bo['resistance']:.6g}){cs_bull_str}"
@@ -993,7 +1005,9 @@ class TradingLoop:
                                 new_direction  = "short"
 
                     elif pair_regime == "bear":
-                        bear_short_thr = bear_cfg.get("short_threshold", 60)
+                        _pair_thr      = pair_thresholds.get(self.asset, {})
+                        bear_short_thr = _pair_thr.get("short_threshold",
+                                             bear_cfg.get("short_threshold", 60))
                         # 1. Breakdown short — confirmed by bear marubozu or engulfing
                         if bo["breakdown"] and trend == "downtrend" and not cs["bull_marubozu"]:
                             lq_note        = f"breakdown(sup={bo['support']:.6g}){cs_bear_str}"

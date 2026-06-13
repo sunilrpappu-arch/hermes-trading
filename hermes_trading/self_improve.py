@@ -23,9 +23,15 @@ import yaml
 from pathlib import Path
 from datetime import datetime, timezone
 
-STATE_DIR    = Path(__file__).parent.parent / "state"
-STRATEGY_FILE = STATE_DIR / "strategy.yaml"
-IMPROVE_LOG   = STATE_DIR / "improve_log.jsonl"
+STATE_DIR         = Path(__file__).parent.parent / "state"
+STRATEGY_FILE     = STATE_DIR / "strategy.yaml"
+IMPROVE_LOG       = STATE_DIR / "improve_log.jsonl"
+PAIR_THRESHOLDS_FILE = STATE_DIR / "pair_thresholds.json"
+
+# Per-pair RSI tuning: max deviation from strategy default (in RSI points)
+PAIR_RSI_MAX_DRIFT = 5
+# Minimum trades per pair before we tune it
+PAIR_RSI_MIN_TRADES = 10
 
 # Bounds for each tunable parameter
 PARAM_BOUNDS = {
@@ -159,6 +165,15 @@ async def improve(
         )
 
     print(f"[self_improve] {summary['message']}", flush=True)
+
+    # Always run per-pair RSI tuning alongside the main improvement cycle
+    try:
+        pair_updates = await tune_pair_thresholds(all_trades, strategy, active_pairs)
+        if pair_updates:
+            summary["pair_threshold_updates"] = pair_updates
+    except Exception as e:
+        print(f"[pair_thresh] tuning error: {e}", flush=True)
+
     return summary
 
 
@@ -431,6 +446,146 @@ def _log_change(record: dict, approved: bool):
     entry = {**record, "approved": approved, "timestamp": time.time()}
     with open(IMPROVE_LOG, "a") as f:
         f.write(json.dumps(entry) + "\n")
+
+
+# ---------------------------------------------------------------------------
+# Per-pair RSI threshold tuning
+# ---------------------------------------------------------------------------
+
+async def tune_pair_thresholds(
+    all_trades: list[dict],
+    strategy:   dict,
+    active_pairs: list[str],
+) -> dict:
+    """
+    For each pair with enough trade history, backtest RSI entry thresholds
+    at default ±1..±5 points and save the best performing threshold to
+    state/pair_thresholds.json.
+
+    Only updates a pair's threshold if the best candidate beats the default
+    by at least MIN_WR_IMPROVEMENT_PP win-rate points or 2.5% PnL.
+    Never moves more than PAIR_RSI_MAX_DRIFT from the strategy default.
+    """
+    from hermes_trading.backtest import run_backtest
+    import copy
+
+    bull_default = strategy.get("bull", {}).get("long_threshold",  35)
+    bear_default = strategy.get("bear", {}).get("short_threshold", 60)
+
+    # Group trades by pair
+    by_pair: dict[str, list] = {}
+    for t in all_trades:
+        p = t.get("pair")
+        if p:
+            by_pair.setdefault(p, []).append(t)
+
+    current_thresholds = _load_pair_thresholds()
+    updated = {}
+
+    for pair in active_pairs:
+        pair_trades = by_pair.get(pair, [])
+        if len(pair_trades) < PAIR_RSI_MIN_TRADES:
+            continue
+
+        # Determine which threshold to tune based on dominant trade direction
+        longs  = [t for t in pair_trades if t.get("direction") == "long"]
+        shorts = [t for t in pair_trades if t.get("direction") == "short"]
+        tune_long  = len(longs)  >= PAIR_RSI_MIN_TRADES // 2
+        tune_short = len(shorts) >= PAIR_RSI_MIN_TRADES // 2
+
+        candidates = []
+
+        if tune_long:
+            lo = max(25, bull_default - PAIR_RSI_MAX_DRIFT)
+            hi = min(45, bull_default + PAIR_RSI_MAX_DRIFT)
+            for thr in range(lo, hi + 1):
+                s = copy.deepcopy(strategy)
+                s.setdefault("bull", {})["long_threshold"] = thr
+                candidates.append(("long_threshold", thr, s))
+
+        if tune_short:
+            lo = max(55, bear_default - PAIR_RSI_MAX_DRIFT)
+            hi = min(72, bear_default + PAIR_RSI_MAX_DRIFT)
+            for thr in range(lo, hi + 1):
+                s = copy.deepcopy(strategy)
+                s.setdefault("bear", {})["short_threshold"] = thr
+                candidates.append(("short_threshold", thr, s))
+
+        if not candidates:
+            continue
+
+        # Run all candidate backtests for this pair concurrently
+        tasks   = [run_backtest(pair, s, lookback_days=60) for _, _, s in candidates]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Baseline: current strategy
+        try:
+            baseline = await run_backtest(pair, strategy, lookback_days=60)
+        except Exception:
+            continue
+
+        baseline_wr  = baseline.get("win_rate", 0)
+        baseline_pnl = baseline.get("total_pnl_pct", 0)
+        baseline_bt  = baseline.get("total_trades", 0)
+        if baseline_bt < MIN_BACKTEST_TRADES:
+            continue
+
+        best_long_thr  = current_thresholds.get(pair, {}).get("long_threshold",  bull_default)
+        best_short_thr = current_thresholds.get(pair, {}).get("short_threshold", bear_default)
+        best_long_wr   = baseline_wr if tune_long  else 0
+        best_short_wr  = baseline_wr if tune_short else 0
+        improved       = False
+
+        for (kind, thr, _), result in zip(candidates, results):
+            if not isinstance(result, dict):
+                continue
+            bt  = result.get("total_trades", 0)
+            wr  = result.get("win_rate", 0)
+            pnl = result.get("total_pnl_pct", 0)
+            if bt < MIN_BACKTEST_TRADES:
+                continue
+            wr_delta  = wr  - baseline_wr
+            pnl_delta = pnl - baseline_pnl
+            qualifies = (wr_delta >= MIN_WR_IMPROVEMENT_PP) or \
+                        (pnl_delta > 2.5 and wr_delta >= -2.0)
+            if kind == "long_threshold" and qualifies and wr > best_long_wr:
+                best_long_wr  = wr
+                best_long_thr = thr
+                improved      = True
+            elif kind == "short_threshold" and qualifies and wr > best_short_wr:
+                best_short_wr = wr
+                best_short_thr = thr
+                improved       = True
+
+        if improved:
+            entry = current_thresholds.get(pair, {})
+            if tune_long:
+                entry["long_threshold"] = best_long_thr
+            if tune_short:
+                entry["short_threshold"] = best_short_thr
+            entry["tuned_at"] = datetime.now(timezone.utc).isoformat()
+            entry["sample_trades"] = len(pair_trades)
+            current_thresholds[pair] = entry
+            updated[pair] = entry
+            print(f"[pair_thresh] {pair}: long_thr={best_long_thr} short_thr={best_short_thr} "
+                  f"(baseline WR={baseline_wr:.0f}%)", flush=True)
+
+    if updated:
+        _write_pair_thresholds(current_thresholds)
+
+    return updated
+
+
+def _load_pair_thresholds() -> dict:
+    try:
+        return json.loads(PAIR_THRESHOLDS_FILE.read_text())
+    except Exception:
+        return {}
+
+
+def _write_pair_thresholds(data: dict):
+    PAIR_THRESHOLDS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    PAIR_THRESHOLDS_FILE.write_text(json.dumps(data, indent=2))
 
 
 # ---------------------------------------------------------------------------
