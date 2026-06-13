@@ -1,5 +1,9 @@
-# v22 — Session breakout mode: relaxed RSI gate + MTF bypass during Asia/London/US opens
-#        Per-pair RSI threshold tuning via self_improve reflection cycle
+# v23 — News RSS sentiment layer: CoinTelegraph/Decrypt/CoinDesk feeds, direction-aware
+#        MTF adjustment (headwind +1, tailwind -1, bypassed when market has priced news)
+#        Active feature manifest: every change tagged + embedded in trade records
+#        Downtime engine: idle diagnosis, OOS backtest, shadow trading after 8h silence
+#        MACD 15m direction-aware scanner conviction (+15 aligned, -10 opposing)
+#        Session breakout mode (v22): Asia/London/US open windows
 # Each pair is classified independently (bull/bear/sideways) using its own 4H ADX + 50MA.
 # New in v11:
 #   - Bull regime: breakout long above resistance; false-breakout short; bearish RSI divergence short
@@ -79,4 +83,4 @@ session_breakout:
   min_fg_score:         18     # blocked if fear/greed below this (extreme fear)
   max_fg_score:         85     # blocked if fear/greed above this (extreme greed)
 
-version: '22'
+version: '23'
