@@ -1408,9 +1408,9 @@ function renderSentiment(sentiment, data) {
     cascade_crash:  e => `🌊 Cascade crash: ${(e.pairs||[]).join(', ')} avg ${(e.avg_move||0).toFixed(1)}%`,
     cascade_pump:   e => `🚀 Cascade pump: ${(e.pairs||[]).join(', ')} avg +${(e.avg_move||0).toFixed(1)}%`,
     feed_anomaly:   e => `📡 Feed anomaly: ${e.asset} — ${e.detail}`,
-    extreme_fear:   e => `😱 Extreme Fear — score ${e.score}/100`,
-    fear_warning:   e => `😟 Fear warning — score ${e.score}/100`,
-    extreme_greed:  e => `🤑 Extreme Greed — score ${e.score}/100 — risk of reversal`,
+    extreme_fear:   e => `😱 Extreme Bearish senti — ${e.score}/100`,
+    fear_warning:   e => `😟 Bearish senti warning — ${e.score}/100`,
+    extreme_greed:  e => `🚀 Extreme Bullish senti — ${e.score}/100 — reversal risk`,
     macro_extreme:  e => `🌋 Macro extreme vol ${(e.vol||0).toFixed(1)}%`,
   };
 

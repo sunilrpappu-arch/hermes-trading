@@ -21,14 +21,14 @@ from __future__ import annotations
 import time
 from datetime import datetime, timezone
 
-# Fear/Greed labels
+# Senti-meter labels — technical momentum, not sentiment surveys
 LABELS = [
-    (0,  20, "Extreme Fear",  "🔴"),
-    (20, 35, "Fear",          "🟠"),
-    (35, 50, "Caution",       "🟡"),
-    (50, 65, "Neutral",       "⚪"),
-    (65, 80, "Greed",         "🟢"),
-    (80, 101,"Extreme Greed", "🤑"),
+    (0,  20, "Extreme Bearish", "🔴"),
+    (20, 35, "Bearish",         "🟠"),
+    (35, 50, "Weak",            "🟡"),
+    (50, 65, "Neutral",         "⚪"),
+    (65, 80, "Bullish",         "🟢"),
+    (80, 101,"Extreme Bullish", "🚀"),
 ]
 
 # Flash crash threshold: single candle move > this % = black swan
@@ -376,11 +376,11 @@ def _format_alert(level: str, events: list[dict], fg_score: dict | None) -> str:
         elif t == "feed_anomaly":
             lines.append(f"📡 Feed anomaly: {e['asset']} — {e['detail']}")
         elif t == "extreme_fear":
-            lines.append(f"😱 Extreme Fear score={e['score']}/100")
+            lines.append(f"😱 Extreme Bearish senti={e['score']}/100")
         elif t == "fear_warning":
-            lines.append(f"😟 Fear warning score={e['score']}/100")
+            lines.append(f"😟 Bearish senti warning score={e['score']}/100")
         elif t == "extreme_greed":
-            lines.append(f"🤑 Extreme Greed score={e['score']}/100 — risk of reversal")
+            lines.append(f"🚀 Extreme Bullish senti={e['score']}/100 — reversal risk")
         elif t == "macro_extreme":
             lines.append(f"🌋 Macro extreme vol={e['vol']:.1f}%")
 
