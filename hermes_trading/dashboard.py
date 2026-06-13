@@ -1125,11 +1125,30 @@ function renderSentiment(sentiment, data) {
       : totalScore >= 85  ? '⚠️ Greed warning threshold'
       : '✅ Normal — no triggers active';
 
+    // MACD breadth card — aggregated from live heartbeat data
+    const hbList    = Object.values(data.heartbeats || {});
+    const macdBull  = hbList.filter(h => h.macd_bull_15m).length;
+    const macdBear  = hbList.filter(h => h.macd_bear_15m).length;
+    const histVals  = hbList.map(h => h.macd_hist_15m).filter(v => v != null);
+    const avgHist   = histVals.length ? histVals.reduce((a,b)=>a+b,0)/histVals.length : null;
+    const bullPairs = hbList.filter(h => h.macd_hist_15m != null && h.macd_hist_15m > 0).length;
+    const bearPairs = hbList.filter(h => h.macd_hist_15m != null && h.macd_hist_15m < 0).length;
+    const macdColor = bullPairs > bearPairs ? '#34d399' : bearPairs > bullPairs ? '#ef4444' : '#64748b';
+    const macdCross = macdBull > 0 ? `🟢 ${macdBull} bullish crossover` : macdBear > 0 ? `🔴 ${macdBear} bearish crossover` : 'No crossovers this tick';
+    macroItems.push({
+      label: 'MACD Breadth (15m)',
+      value: avgHist != null ? (avgHist >= 0 ? '+' : '') + avgHist.toFixed(5) : '—',
+      note:  `${bullPairs}↑ ${bearPairs}↓ pairs · ${macdCross}`,
+      tip:   'MACD histogram averaged across all active pairs on 15m. Positive = bullish momentum building. Crossover = MACD line crossing signal line.',
+      color: macdColor,
+      pair:  'BTC/USDT',
+    });
+
     const breakdown = c.rsi_score != null
       ? `RSI ${c.rsi_score.toFixed(0)}/30 · MA ${c.ma_score.toFixed(0)}/25 · VWAP ${c.vwap_score.toFixed(0)}/20 · Vol ${(c.vol_score||0).toFixed(0)}/15 · Mom ${(c.mom_score||0).toFixed(0)}/10`
       : '—';
 
-    macroEl.innerHTML = macroItems.map(m => `
+    macroEl.innerHTML = macroItems.filter(Boolean).map(m => `
       <div class="bg-slate-900 rounded-lg px-3 py-2 cursor-default" title="${m.tip}"
            ${m.pair ? `onclick="loadChart('${m.pair}')" style="cursor:pointer"` : ''}>
         <p class="text-slate-500 text-xs mb-0.5">${m.label}${m.pair ? ' <span class="text-indigo-500">↗</span>' : ''}</p>

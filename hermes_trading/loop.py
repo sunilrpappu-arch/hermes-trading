@@ -678,6 +678,11 @@ class TradingLoop:
         c1h_full = get_closes(candles.get("1h", []))
         bb_1h = (bb_squeeze(c1h_full) if len(c1h_full) >= 70 else _bb_empty)
 
+        # MACD on 15m (informational — written to heartbeat for dashboard display)
+        _macd_empty = {"macd": 0, "signal": 0, "histogram": 0,
+                       "crossover_bullish": False, "crossover_bearish": False}
+        macd_15m = compute_macd(c15m) if len(c15m) >= 35 else _macd_empty
+
         # VWAP on 15m candles (intraday, resets at UTC midnight)
         # price_above → bullish intraday bias; band touches → precision entry/exit levels
         vwap_15m = compute_vwap(candles_15m_raw) if len(candles_15m_raw) >= 5 else None
@@ -1228,6 +1233,12 @@ class TradingLoop:
             "bb_dir":        bb["expansion_dir"],
             "bb_bandwidth":  bb["bb"]["bandwidth"] if bb["bb"] else None,
             "bb_pct_b":      bb["bb"]["pct_b"]     if bb["bb"] else None,
+            # MACD 15m (informational — not a hard gate, displayed on dashboard)
+            "macd_15m":           round(macd_15m["macd"],      6) if macd_15m and macd_15m.get("macd") is not None else None,
+            "macd_signal_15m":    round(macd_15m["signal"],    6) if macd_15m and macd_15m.get("signal") is not None else None,
+            "macd_hist_15m":      round(macd_15m["histogram"], 6) if macd_15m and macd_15m.get("histogram") is not None else None,
+            "macd_bull_15m":      macd_15m.get("crossover_bullish",  False) if macd_15m else False,
+            "macd_bear_15m":      macd_15m.get("crossover_bearish",  False) if macd_15m else False,
             # VWAP (Step 3 — intraday institutional anchor)
             "vwap":          vwap_15m["vwap"]          if vwap_15m else None,
             "vwap_upper_1":  vwap_15m["upper_1"]       if vwap_15m else None,
