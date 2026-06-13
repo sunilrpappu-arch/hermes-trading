@@ -23,10 +23,11 @@ import yaml
 from pathlib import Path
 from datetime import datetime, timezone
 
-STATE_DIR         = Path(__file__).parent.parent / "state"
-STRATEGY_FILE     = STATE_DIR / "strategy.yaml"
-IMPROVE_LOG       = STATE_DIR / "improve_log.jsonl"
+STATE_DIR            = Path(__file__).parent.parent / "state"
+STRATEGY_FILE        = STATE_DIR / "strategy.yaml"
+IMPROVE_LOG          = STATE_DIR / "improve_log.jsonl"
 PAIR_THRESHOLDS_FILE = STATE_DIR / "pair_thresholds.json"
+ACTIVE_FEATURES_FILE = STATE_DIR / "active_features.json"
 
 # Per-pair RSI tuning: max deviation from strategy default (in RSI points)
 PAIR_RSI_MAX_DRIFT = 5
@@ -147,6 +148,19 @@ async def improve(
         }
         summary["changes"].append(change_record)
         _log_change(change_record, approved=True)
+
+        # Register in active features manifest so trades can be tagged
+        feature_name = f"{param}:{proposed_val}"
+        register_feature(
+            name        = feature_name,
+            feature_type = "auto",
+            description = hypothesis["reason"],
+            param       = param,
+            old_val     = current_val,
+            new_val     = proposed_val,
+            baseline_wr = verdict["baseline_wr"],
+            proposed_wr = verdict["proposed_wr"],
+        )
 
         summary["message"] = (
             f"✅ Changed {param}: {current_val} → {proposed_val}\n"
@@ -449,6 +463,47 @@ def _log_change(record: dict, approved: bool):
 
 
 # ---------------------------------------------------------------------------
+# Active feature manifest — tracks what's live and when it changed
+# ---------------------------------------------------------------------------
+
+def load_active_features() -> dict:
+    """Load the active features manifest. Returns {} if not yet created."""
+    try:
+        return json.loads(ACTIVE_FEATURES_FILE.read_text())
+    except Exception:
+        return {}
+
+
+def register_feature(name: str, feature_type: str, description: str, **meta):
+    """
+    Register or update a feature in the active features manifest.
+    Called by self_improve when it applies a change, and can be called
+    at boot from loop.py to register code-level features.
+
+    feature_type: 'auto'  — self_improve parameter change
+                  'code'  — deployed code feature (session breakout, news caution, etc.)
+                  'pair'  — per-pair threshold override
+    """
+    features = load_active_features()
+    features[name] = {
+        "type":        feature_type,
+        "description": description,
+        "enabled_at":  datetime.now(timezone.utc).isoformat(),
+        **meta,
+    }
+    ACTIVE_FEATURES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    ACTIVE_FEATURES_FILE.write_text(json.dumps(features, indent=2))
+
+
+def active_feature_labels() -> list[str]:
+    """Return list of active feature names for embedding in trade records."""
+    try:
+        return list(load_active_features().keys())
+    except Exception:
+        return []
+
+
+# ---------------------------------------------------------------------------
 # Per-pair RSI threshold tuning
 # ---------------------------------------------------------------------------
 
@@ -569,6 +624,18 @@ async def tune_pair_thresholds(
             updated[pair] = entry
             print(f"[pair_thresh] {pair}: long_thr={best_long_thr} short_thr={best_short_thr} "
                   f"(baseline WR={baseline_wr:.0f}%)", flush=True)
+
+            sym = pair.replace("/USDT", "")
+            register_feature(
+                name         = f"pair_rsi:{sym}",
+                feature_type = "pair",
+                description  = f"{sym} RSI thresholds tuned from historical data",
+                pair         = pair,
+                long_thr     = best_long_thr,
+                short_thr    = best_short_thr,
+                baseline_wr  = baseline_wr,
+                sample_trades = len(pair_trades),
+            )
 
     if updated:
         _write_pair_thresholds(current_thresholds)

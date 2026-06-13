@@ -50,6 +50,7 @@ from hermes_trading.downtime import (
     should_run_downtime, run_downtime,
     record_shadow_trade, resolve_shadow_trades,
 )
+from hermes_trading.self_improve import register_feature, active_feature_labels
 
 STATE_DIR           = Path(os.getenv("STATE_DIR", Path(__file__).parent.parent / "state"))
 TRADES_FILE         = STATE_DIR / "trades.jsonl"
@@ -1311,6 +1312,7 @@ class TradingLoop:
                     "session_breakout":   active_session["name"] if in_session_window else None,
                     "news_label":         pair_news.get("label", "no_data") if pair_news else "no_data",
                     "news_sentiment":     pair_news.get("sentiment", 0.0)   if pair_news else 0.0,
+                    "active_features":    active_feature_labels(),
                     "strategy_version":   strategy.get("version", "unknown"),
                     "mode":               "live" if is_live() else "paper",
                 }
@@ -1471,6 +1473,25 @@ class TradingLoop:
         print(f"Booting {mode_tag} [{self.asset}] capital={self.capital_usdt} USDT", flush=True)
         STATE_DIR.mkdir(parents=True, exist_ok=True)
         self._load_position()   # restore any open position that survived a restart
+
+        # Register active code-level features at boot so trades are tagged correctly
+        try:
+            strategy = load_strategy()
+            sb_cfg   = strategy.get("session_breakout", {})
+            if sb_cfg.get("enabled", True):
+                register_feature("session_breakout", "code",
+                                 "Relaxed RSI+MTF gate during Asia/London/US open windows",
+                                 rsi_relax=sb_cfg.get("rsi_relax_pts", 5))
+            register_feature("news_caution", "code",
+                             "News sentiment adjusts MTF requirement per trade direction")
+            register_feature("macd_15m_scoring", "code",
+                             "MACD 15m crossover direction-aware scanner conviction bonus")
+            register_feature("per_pair_rsi_tuning", "code",
+                             "RSI thresholds auto-tuned per pair via reflection cycle")
+            register_feature("downtime_engine", "code",
+                             "Idle diagnosis, OOS backtest, shadow trading during quiet markets")
+        except Exception as e:
+            print(f"[features] boot registration failed: {e}", flush=True)
 
         if market_queue is not None:
             while True:

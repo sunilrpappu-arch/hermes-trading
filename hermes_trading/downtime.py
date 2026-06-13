@@ -75,7 +75,18 @@ async def run_downtime(
         if oos_result["overfit_warning"]:
             lines.append("  ⚠️ Possible overfitting — test WR is >15pp below train WR")
 
-    # 3. Shadow trade evaluation
+    # 3. Feature cohort analysis
+    cohort_summary = _feature_cohort_analysis(all_trades)
+    if cohort_summary:
+        lines.append("\n🏷️ <b>Feature cohorts</b> (trades since each change)")
+        for label, stats in cohort_summary.items():
+            wr   = stats["win_rate"]
+            n    = stats["count"]
+            pnl  = stats["total_pnl"]
+            tick = "✅" if wr >= 55 else "⚠️" if wr >= 40 else "❌"
+            lines.append(f"  {tick} {label}: {n} trades · WR {wr:.0f}% · PnL {pnl:+.2f}%")
+
+    # 4. Shadow trade evaluation
     shadow_summary = _evaluate_shadow_trades(all_trades)
     if shadow_summary:
         lines.append("\n👻 <b>Shadow trade outcomes</b>")
@@ -281,6 +292,34 @@ def resolve_shadow_trades(current_prices: dict[str, float]):
 
     if updated:
         SHADOW_TRADES.write_text("\n".join(json.dumps(t) for t in trades) + "\n")
+
+
+def _feature_cohort_analysis(all_trades: list[dict]) -> dict | None:
+    """
+    Group trades by active features and compute WR/PnL per cohort.
+    Only includes features that appear in at least 5 trades.
+    """
+    if not all_trades:
+        return None
+
+    cohorts: dict[str, list] = {}
+    for t in all_trades:
+        for feature in t.get("active_features", []):
+            cohorts.setdefault(feature, []).append(t)
+
+    result = {}
+    for feature, trades in cohorts.items():
+        if len(trades) < 5:
+            continue
+        wins  = sum(1 for t in trades if (t.get("pnl_pct") or 0) > 0)
+        pnl   = sum((t.get("pnl_pct") or 0) * 100 for t in trades)
+        result[feature] = {
+            "count":      len(trades),
+            "win_rate":   wins / len(trades) * 100,
+            "total_pnl":  round(pnl, 2),
+        }
+
+    return result or None
 
 
 def _evaluate_shadow_trades(all_live_trades: list[dict]) -> dict | None:

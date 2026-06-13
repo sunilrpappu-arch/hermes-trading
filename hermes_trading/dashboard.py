@@ -86,6 +86,14 @@ def _read_drawdown() -> dict:
         return {}
 
 
+def _read_active_features() -> dict:
+    af = STATE_DIR / "active_features.json"
+    try:
+        return json.loads(af.read_text()) if af.exists() else {}
+    except Exception:
+        return {}
+
+
 def _read_strategy() -> dict:
     sf = STATE_DIR / "strategy.yaml"
     if not sf.exists():
@@ -205,7 +213,8 @@ async def api_state():
         "cum_pnl":       cum_pnl,
         "heartbeats":    heartbeats,
         "recent_trades": list(reversed(trades)),  # all trades, newest first — paginated client-side
-        "sentiment":     sentiment,
+        "sentiment":        sentiment,
+        "active_features":  _read_active_features(),
     })
 
 
@@ -466,6 +475,7 @@ _HTML = r"""<!DOCTYPE html>
     <span id="mode-badge" class="badge bg-slate-700 text-slate-300">…</span>
     <span id="regime-badge" class="badge">…</span>
     <span id="strategy-ver" class="text-slate-500 text-xs">v?</span>
+    <div id="active-features" class="flex flex-wrap gap-1"></div>
     <span id="refresh-spinner" class="spinner"></span>
   </div>
 </div>
@@ -1041,6 +1051,27 @@ function renderPnlChart(points) {
   });
 }
 
+// ── Active features chips ────────────────────────────────────────────────────
+
+function renderActiveFeatures(features) {
+  const el = document.getElementById('active-features');
+  const entries = Object.entries(features || {});
+  if (!entries.length) { el.innerHTML = ''; return; }
+
+  const typeColor = { code: '#1e3a5f', auto: '#1a2e1a', pair: '#2d1f3d' };
+  const typeText  = { code: '#93c5fd', auto: '#86efac', pair: '#c4b5fd' };
+
+  el.innerHTML = entries.map(([name, f]) => {
+    const bg  = typeColor[f.type] || '#1e293b';
+    const col = typeText[f.type]  || '#94a3b8';
+    const tip = `${f.description || name}\nEnabled: ${f.enabled_at ? new Date(f.enabled_at).toLocaleString() : '?'}`;
+    const label = name.length > 20 ? name.slice(0, 18) + '…' : name;
+    return `<span title="${tip}"
+      style="background:${bg};color:${col};font-size:9px;padding:2px 6px;border-radius:4px;cursor:default;white-space:nowrap">
+      ${label}</span>`;
+  }).join('');
+}
+
 // ── Latest news panel ────────────────────────────────────────────────────────
 
 function renderNews(heartbeats) {
@@ -1374,6 +1405,9 @@ async function refresh() {
 
     const ver = data.strategy?.version || data.strategy_version;
     document.getElementById('strategy-ver').textContent = ver ? 'v' + ver : '';
+
+    // Active features chips
+    renderActiveFeatures(data.active_features || {});
 
     // Total capital + deployed
     const totalCap = data.total_capital_usdt || data.drawdown?.total_capital || 1000;
