@@ -673,6 +673,17 @@ _HTML = r"""<!DOCTYPE html>
   <div id="tv-chart-container" style="height:480px;"></div>
 </div>
 
+<!-- Latest News -->
+<div class="card mb-6">
+  <div class="flex items-center justify-between mb-3">
+    <p class="text-slate-400 text-xs font-semibold">📰 LATEST NEWS <span class="text-slate-600 font-normal">(active pairs · last 24h)</span></p>
+    <span id="news-updated" class="text-slate-600 text-xs"></span>
+  </div>
+  <div id="news-panel" class="space-y-1">
+    <p class="text-slate-600 text-xs">Loading...</p>
+  </div>
+</div>
+
 <!-- Recent trades -->
 <div class="card mb-6">
   <div class="flex items-center justify-between mb-3">
@@ -754,8 +765,9 @@ function renderPairs(heartbeats) {
     const rsi      = hb.rsi_15m ?? '—';
     const rng      = hb.rng_pos != null ? Math.round(hb.rng_pos * 100) + '%' : null;
     const tsAge    = hb.timestamp ? Math.round((Date.now() - new Date(hb.timestamp).getTime()) / 1000) : null;
-    const newsLabel  = hb.news_label || 'no_data';
-    const newsHeadline = hb.news_headline || null;
+    const newsLabel     = hb.news_label || 'no_data';
+    const newsHeadlines = hb.news_headlines || [];
+    const newsHeadline  = newsHeadlines[0] || null;
     const newsBadge = newsLabel === 'bullish'  ? `<span title="${newsHeadline||''}" style="color:#34d399;font-size:10px">📰▲</span>`
                     : newsLabel === 'bearish'  ? `<span title="${newsHeadline||''}" style="color:#f87171;font-size:10px">📰▼</span>`
                     : newsLabel === 'neutral'  ? `<span title="${newsHeadline||''}" style="color:#64748b;font-size:10px">📰</span>`
@@ -867,7 +879,7 @@ function renderPairs(heartbeats) {
     // ── COMPACT card for flat pairs ──
     return `
     <div class="flex items-center justify-between bg-slate-900 rounded-lg px-3 py-2 cursor-pointer hover:bg-slate-800 transition-colors"
-         onclick="loadChart('${asset}')" title="${newsHeadline ? '📰 ' + newsHeadline : 'Click to load chart'}">
+         onclick="loadChart('${asset}')" title="${newsHeadlines.length ? '📰 ' + newsHeadlines.join(' | ') : 'Click to load chart'}">
       <div>
         <span class="font-semibold text-sm text-white">${asset.replace('/USDT','')}/USDT</span>
         <span class="${posClass} text-xs font-bold ml-2">${posLabel}</span>
@@ -1027,6 +1039,47 @@ function renderPnlChart(points) {
       }
     }
   });
+}
+
+// ── Latest news panel ────────────────────────────────────────────────────────
+
+function renderNews(heartbeats) {
+  const panel = document.getElementById('news-panel');
+  const hbList = Object.values(heartbeats || {});
+
+  // Collect all headlines across active pairs, tagged with pair + sentiment
+  const items = [];
+  for (const hb of hbList) {
+    const headlines = hb.news_headlines || [];
+    const label     = hb.news_label || 'no_data';
+    const asset     = hb.asset || '';
+    const sym       = asset.replace('/USDT', '');
+    const color     = label === 'bullish' ? '#34d399' : label === 'bearish' ? '#f87171' : '#64748b';
+    const icon      = label === 'bullish' ? '▲' : label === 'bearish' ? '▼' : '·';
+    headlines.forEach(h => items.push({ sym, color, icon, headline: h, label }));
+  }
+
+  if (!items.length) {
+    panel.innerHTML = '<p class="text-slate-600 text-xs italic">No news matched for active pairs in the last 24h</p>';
+    document.getElementById('news-updated').textContent = 'no data';
+    return;
+  }
+
+  // Group by pair, bullish first then bearish then neutral
+  const order = { bullish: 0, bearish: 1, neutral: 2, no_data: 3 };
+  items.sort((a, b) => (order[a.label] ?? 3) - (order[b.label] ?? 3));
+
+  panel.innerHTML = items.map(item => `
+    <div class="flex items-start gap-2 py-1 border-b border-slate-800 last:border-0">
+      <span class="font-bold text-xs font-mono shrink-0 w-12 pt-0.5 cursor-pointer"
+            style="color:${item.color}" onclick="loadChart('${item.sym}/USDT')"
+            title="Load ${item.sym} chart">${item.sym}</span>
+      <span style="color:${item.color};font-size:10px" class="shrink-0 pt-0.5">${item.icon}</span>
+      <span class="text-slate-300 text-xs leading-relaxed">${item.headline}</span>
+    </div>`).join('');
+
+  document.getElementById('news-updated').textContent =
+    `${items.length} headlines · refreshed ${new Date().toLocaleTimeString()}`;
 }
 
 // ── Session window bar ───────────────────────────────────────────────────────
@@ -1408,6 +1461,9 @@ async function refresh() {
 
     // Session window bar
     renderSessionBar(data.heartbeats || {});
+
+    // News panel
+    renderNews(data.heartbeats || {});
 
     // Timestamp
     document.getElementById('last-updated').textContent = new Date().toLocaleTimeString();
