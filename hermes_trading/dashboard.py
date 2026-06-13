@@ -1108,20 +1108,43 @@ function renderSentiment(sentiment, data) {
         tip: 'SOL + BNB + ADA basket vs BTC. Bullish = small caps outperforming. BTC.D rising = capital flowing back to BTC.',
         color: biasColor(total3),
         pair: 'TOTAL3' },
-      { label: 'Score Breakdown',
-        value: c.rsi_score != null ? `RSI ${c.rsi_score.toFixed(0)} · MA ${c.ma_score.toFixed(0)} · VWAP ${c.vwap_score.toFixed(0)}` : '—',
-        note: `Vol ${(c.vol_score||0).toFixed(0)} · Momentum ${(c.mom_score||0).toFixed(0)} · Total /100`,
-        tip: 'Raw point contributions from each of the 5 signals. Max: RSI 30 + MA 25 + VWAP 20 + Vol 15 + Momentum 10 = 100.',
-        color: '#64748b',
-        pair: null },
     ];
+
+    // Compute total score and what it triggers
+    const totalScore = fg.score != null ? fg.score : null;
+    const scoreColor = totalScore == null ? '#64748b'
+      : totalScore <= 10  ? '#ef4444'   // Extreme Fear → CRITICAL halt
+      : totalScore <= 18  ? '#f97316'   // Fear → WARNING banner
+      : totalScore >= 93  ? '#f59e0b'   // Extreme Greed → WARNING banner
+      : totalScore >= 85  ? '#fbbf24'   // Greed warning
+      : '#34d399';
+    const scoreTrigger = totalScore == null ? ''
+      : totalScore <= 10  ? '🚨 CRITICAL — all entries halted'
+      : totalScore <= 18  ? '⚠️ WARNING — advisory banner shown'
+      : totalScore >= 93  ? '⚠️ WARNING — extreme greed, reversal risk'
+      : totalScore >= 85  ? '⚠️ Greed warning threshold'
+      : '✅ Normal — no triggers active';
+
+    const breakdown = c.rsi_score != null
+      ? `RSI ${c.rsi_score.toFixed(0)}/30 · MA ${c.ma_score.toFixed(0)}/25 · VWAP ${c.vwap_score.toFixed(0)}/20 · Vol ${(c.vol_score||0).toFixed(0)}/15 · Mom ${(c.mom_score||0).toFixed(0)}/10`
+      : '—';
+
     macroEl.innerHTML = macroItems.map(m => `
       <div class="bg-slate-900 rounded-lg px-3 py-2 cursor-default" title="${m.tip}"
            ${m.pair ? `onclick="loadChart('${m.pair}')" style="cursor:pointer"` : ''}>
         <p class="text-slate-500 text-xs mb-0.5">${m.label}${m.pair ? ' <span class="text-indigo-500">↗</span>' : ''}</p>
         <p class="font-bold text-sm font-mono" style="color:${m.color}">${m.value}</p>
         <p class="text-slate-600 text-xs">${m.note}</p>
-      </div>`).join('');
+      </div>`).join('') + `
+    <div class="col-span-2 bg-slate-900 rounded-lg px-3 py-2 border border-slate-700">
+      <p class="text-slate-500 text-xs mb-1">SCORE BREAKDOWN — what each signal contributed</p>
+      <p class="font-mono text-xs text-slate-300 mb-1">${breakdown}</p>
+      <div class="flex items-center justify-between">
+        <span class="text-slate-500 text-xs">${scoreTrigger}</span>
+        <span class="font-bold text-lg font-mono" style="color:${scoreColor}">${totalScore != null ? totalScore + '/100' : '—'}</span>
+      </div>
+      <p class="text-slate-600 text-xs mt-1">Thresholds: ≤10 critical halt · ≤18 warning · ≥85 greed warning · ≥93 extreme greed warning</p>
+    </div>`;
   }
 
   // ── Black Swan banner ─────────────────────────────────────────────────────
