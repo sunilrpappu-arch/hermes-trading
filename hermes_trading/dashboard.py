@@ -1096,18 +1096,6 @@ function renderSentiment(sentiment, data) {
         tip: 'Where price sits within its recent 20-bar high/low range across all pairs. 0% = at lows, 100% = at highs. Score: 10pts max.',
         color: c.avg_rng_pos < 0.3 ? '#ef4444' : c.avg_rng_pos > 0.7 ? '#34d399' : '#64748b',
         pair: 'BTC/USDT' },
-      { label: 'Total3 (alts)',
-        value: total3 !== '—' ? total3.toUpperCase() : '—',
-        note: btcDomRising ? 'BTC dominance rising' : 'BTC dom stable/falling',
-        tip: 'SOL + BNB + ADA basket vs BTC. Bullish = small caps outperforming. BTC.D rising = capital flowing back to BTC.',
-        color: biasColor(total3),
-        pair: 'TOTAL3' },
-      { label: 'Total2 (ex-BTC)',
-        value: total2 !== '—' ? total2.toUpperCase() : '—',
-        note: altSeason ? '🌟 Alt season active' : 'No alt season',
-        tip: 'Total crypto market cap excluding BTC (ETH+alts). Computed from ETH 1H candles vs BTC dominance. Bullish = alts outperforming.',
-        color: biasColor(total2),
-        pair: 'TOTAL2' },
     ];
 
     // Compute total score and what it triggers
@@ -1135,6 +1123,7 @@ function renderSentiment(sentiment, data) {
     const bearPairs = hbList.filter(h => h.macd_hist_15m != null && h.macd_hist_15m < 0).length;
     const macdColor = bullPairs > bearPairs ? '#34d399' : bearPairs > bullPairs ? '#ef4444' : '#64748b';
     const macdCross = macdBull > 0 ? `🟢 ${macdBull} bullish crossover` : macdBear > 0 ? `🔴 ${macdBear} bearish crossover` : 'No crossovers this tick';
+    // Row 3: Price Momentum (already pushed) + MACD
     macroItems.push({
       label: 'MACD Breadth (15m)',
       value: avgHist != null ? (avgHist >= 0 ? '+' : '') + avgHist.toFixed(5) : '—',
@@ -1142,6 +1131,23 @@ function renderSentiment(sentiment, data) {
       tip:   'MACD histogram averaged across all active pairs on 15m. Positive = bullish momentum building. Crossover = MACD line crossing signal line.',
       color: macdColor,
       pair:  'BTC/USDT',
+    });
+    // Row 4: Total3 + Total2
+    macroItems.push({
+      label: 'Total3 (alts)',
+      value: total3 !== '—' ? total3.toUpperCase() : '—',
+      note:  btcDomRising ? 'BTC dominance rising' : 'BTC dom stable/falling',
+      tip:   'SOL + BNB + ADA basket vs BTC. Bullish = small caps outperforming. BTC.D rising = capital flowing back to BTC.',
+      color: biasColor(total3),
+      pair:  'TOTAL3',
+    });
+    macroItems.push({
+      label: 'Total2 (ex-BTC)',
+      value: total2 !== '—' ? total2.toUpperCase() : '—',
+      note:  altSeason ? '🌟 Alt season active' : 'No alt season',
+      tip:   'Total crypto market cap excluding BTC (ETH+alts). Computed from ETH 1H candles vs BTC dominance. Bullish = alts outperforming.',
+      color: biasColor(total2),
+      pair:  'TOTAL2',
     });
 
     const breakdown = c.rsi_score != null
