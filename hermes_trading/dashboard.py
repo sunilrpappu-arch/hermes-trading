@@ -1094,11 +1094,11 @@ function renderActiveFeatures(features) {
 
 // ── Latest news panel ────────────────────────────────────────────────────────
 
+let _allNewsItems = [];   // persists so filterNewsByChart() can re-render
+
 function renderNews(heartbeats) {
-  const panel = document.getElementById('news-panel');
   const hbList = Object.values(heartbeats || {});
 
-  // Collect all headlines across active pairs, tagged with pair + sentiment
   const items = [];
   for (const hb of hbList) {
     const headlines = hb.news_headlines || [];
@@ -1110,27 +1110,61 @@ function renderNews(heartbeats) {
     headlines.forEach(h => items.push({ sym, color, icon, headline: h, label }));
   }
 
+  // Sort: bullish first, then bearish, then neutral
+  const order = { bullish: 0, bearish: 1, neutral: 2, no_data: 3 };
+  items.sort((a, b) => (order[a.label] ?? 3) - (order[b.label] ?? 3));
+
+  _allNewsItems = items;
+  _renderNewsItems(items, null);
+}
+
+function filterNewsByChart(sym) {
+  // sym = e.g. "XRP" — show that pair's news highlighted, others dimmed
+  _renderNewsItems(_allNewsItems, sym);
+}
+
+function _renderNewsItems(items, activeSym) {
+  const panel = document.getElementById('news-panel');
   if (!items.length) {
     panel.innerHTML = '<p class="text-slate-600 text-xs italic">No news matched for active pairs in the last 24h</p>';
     document.getElementById('news-updated').textContent = 'no data';
     return;
   }
 
-  // Group by pair, bullish first then bearish then neutral
-  const order = { bullish: 0, bearish: 1, neutral: 2, no_data: 3 };
-  items.sort((a, b) => (order[a.label] ?? 3) - (order[b.label] ?? 3));
+  // When a chart pair is active: show that pair's rows first and full-bright,
+  // other pairs dimmed below with a divider
+  let rows;
+  if (activeSym) {
+    const mine   = items.filter(i => i.sym === activeSym);
+    const others = items.filter(i => i.sym !== activeSym);
+    const makeRow = (item, dim) => `
+      <div class="flex items-start gap-2 py-1 border-b border-slate-800 last:border-0"
+           style="${dim ? 'opacity:0.35' : ''}">
+        <span class="font-bold text-xs font-mono shrink-0 w-12 pt-0.5 cursor-pointer"
+              style="color:${item.color}" onclick="loadChart('${item.sym}/USDT')"
+              title="Load ${item.sym} chart">${item.sym}</span>
+        <span style="color:${item.color};font-size:10px" class="shrink-0 pt-0.5">${item.icon}</span>
+        <span class="text-slate-300 text-xs leading-relaxed">${item.headline}</span>
+      </div>`;
+    const mineHtml   = mine.map(i => makeRow(i, false)).join('');
+    const othersHtml = others.map(i => makeRow(i, true)).join('');
+    const divider    = others.length && mine.length
+      ? `<p class="text-slate-700 text-xs pt-1 pb-0.5">— other pairs —</p>` : '';
+    rows = mineHtml + divider + othersHtml;
+  } else {
+    rows = items.map(item => `
+      <div class="flex items-start gap-2 py-1 border-b border-slate-800 last:border-0">
+        <span class="font-bold text-xs font-mono shrink-0 w-12 pt-0.5 cursor-pointer"
+              style="color:${item.color}" onclick="loadChart('${item.sym}/USDT')"
+              title="Load ${item.sym} chart">${item.sym}</span>
+        <span style="color:${item.color};font-size:10px" class="shrink-0 pt-0.5">${item.icon}</span>
+        <span class="text-slate-300 text-xs leading-relaxed">${item.headline}</span>
+      </div>`).join('');
+  }
 
-  panel.innerHTML = items.map(item => `
-    <div class="flex items-start gap-2 py-1 border-b border-slate-800 last:border-0">
-      <span class="font-bold text-xs font-mono shrink-0 w-12 pt-0.5 cursor-pointer"
-            style="color:${item.color}" onclick="loadChart('${item.sym}/USDT')"
-            title="Load ${item.sym} chart">${item.sym}</span>
-      <span style="color:${item.color};font-size:10px" class="shrink-0 pt-0.5">${item.icon}</span>
-      <span class="text-slate-300 text-xs leading-relaxed">${item.headline}</span>
-    </div>`).join('');
-
-  document.getElementById('news-updated').textContent =
-    `${items.length} headlines · refreshed ${new Date().toLocaleTimeString()}`;
+  panel.innerHTML = rows;
+  const updated = document.getElementById('news-updated');
+  if (updated) updated.textContent = `${items.length} headlines · refreshed ${new Date().toLocaleTimeString()}`;
 }
 
 // ── Session window bar ───────────────────────────────────────────────────────
@@ -1739,9 +1773,13 @@ function loadChart(asset) {
   _currentTvSymbol = sym;
 
   // Update label and expand link
-  document.getElementById('chart-symbol-label').textContent = (asset || 'BTC/USDT').replace('/USDT', '') + '/USDT';
+  const pairLabel = (asset || 'BTC/USDT').replace('/USDT', '') + '/USDT';
+  document.getElementById('chart-symbol-label').textContent = pairLabel;
   document.getElementById('tv-expand-btn').href =
     `https://www.tradingview.com/chart/?symbol=${sym}`;
+
+  // Filter news panel to this pair
+  filterNewsByChart(pairLabel.replace('/USDT', ''));
 
   // Scroll chart into view
   document.getElementById('tv-chart-container')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
