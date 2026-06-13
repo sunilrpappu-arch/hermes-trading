@@ -1142,9 +1142,12 @@ function renderSentiment(sentiment, data) {
     // MACD card is rendered separately (not via macroItems) so chips are clickable
     const macdCardHtml = `
       <div class="bg-slate-900 rounded-lg px-3 py-2">
-        <p class="text-slate-500 text-xs mb-0.5">MACD Breadth (15m)</p>
-        <p class="font-bold text-sm font-mono mb-1" style="color:${macdColor}">${avgHist != null ? (avgHist >= 0 ? '+' : '') + avgHist.toFixed(5) : '—'}</p>
-        <div class="flex flex-wrap gap-0.5">${pairChips || '<span class="text-slate-600 text-xs">No data</span>'}</div>
+        <p class="text-slate-500 text-xs mb-0.5">MACD Breadth (15m) <span class="text-indigo-500">↗</span></p>
+        <p class="font-bold text-sm font-mono mb-1" style="color:${macdColor}">${avgHist != null ? (avgHist >= 0 ? '+' : '') + avgHist.toFixed(5) : '—'}
+          <span class="text-slate-500 font-normal text-xs ml-1">avg histogram · ${bullPairs}↑ ${bearPairs}↓ pairs</span>
+        </p>
+        <div class="flex flex-wrap gap-0.5 mb-1">${pairChips || '<span class="text-slate-600 text-xs">No data</span>'}</div>
+        <p class="text-slate-600 text-xs">🟢 bull crossover &nbsp;🔴 bear crossover &nbsp;↑ hist+ &nbsp;↓ hist− &nbsp;· click pair to view chart</p>
       </div>`;
     // Row 4: Total3 + Total2
     macroItems.push({
