@@ -754,6 +754,12 @@ function renderPairs(heartbeats) {
     const rsi      = hb.rsi_15m ?? '—';
     const rng      = hb.rng_pos != null ? Math.round(hb.rng_pos * 100) + '%' : null;
     const tsAge    = hb.timestamp ? Math.round((Date.now() - new Date(hb.timestamp).getTime()) / 1000) : null;
+    const newsLabel  = hb.news_label || 'no_data';
+    const newsHeadline = hb.news_headline || null;
+    const newsBadge = newsLabel === 'bullish'  ? `<span title="${newsHeadline||''}" style="color:#34d399;font-size:10px">📰▲</span>`
+                    : newsLabel === 'bearish'  ? `<span title="${newsHeadline||''}" style="color:#f87171;font-size:10px">📰▼</span>`
+                    : newsLabel === 'neutral'  ? `<span title="${newsHeadline||''}" style="color:#64748b;font-size:10px">📰</span>`
+                    : '';
     const ageStr   = tsAge != null ? (tsAge < 120 ? tsAge + 's ago' : Math.round(tsAge/60) + 'm ago') : '?';
     const ageColor = tsAge == null ? '#64748b' : tsAge < 90 ? '#34d399' : tsAge < 300 ? '#fbbf24' : '#f87171';
 
@@ -861,10 +867,11 @@ function renderPairs(heartbeats) {
     // ── COMPACT card for flat pairs ──
     return `
     <div class="flex items-center justify-between bg-slate-900 rounded-lg px-3 py-2 cursor-pointer hover:bg-slate-800 transition-colors"
-         onclick="loadChart('${asset}')" title="Click to load chart">
+         onclick="loadChart('${asset}')" title="${newsHeadline ? '📰 ' + newsHeadline : 'Click to load chart'}">
       <div>
         <span class="font-semibold text-sm text-white">${asset.replace('/USDT','')}/USDT</span>
         <span class="${posClass} text-xs font-bold ml-2">${posLabel}</span>
+        ${newsBadge}
       </div>
       <div class="text-right text-xs text-slate-400">
         <div>$${parseFloat(hb.price || 0).toFixed(4)}</div>

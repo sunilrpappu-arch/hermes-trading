@@ -45,6 +45,7 @@ from hermes_trading.indicators import (
 from hermes_trading.adapters.candles import closes as get_closes, highs as get_highs, lows as get_lows
 from hermes_trading.notify import send_trade_email, send_reflection_notification
 from hermes_trading.session_windows import current_session, session_volume_multiplier
+from hermes_trading.news import fetch_news, symbol_from_pair
 from hermes_trading.downtime import (
     should_run_downtime, run_downtime,
     record_shadow_trade, resolve_shadow_trades,
@@ -735,6 +736,9 @@ class TradingLoop:
         # Session breakout detection
         active_session  = current_session()                             # None or {name, emoji, minutes_remaining}
         session_vol_mul = session_volume_multiplier(candles_15m_raw)   # ratio vs 24h avg
+
+        # News context (CryptoPanic, 15m cached, no-op if no token)
+        pair_news = await fetch_news(symbol_from_pair(self.asset))
         fg_score        = (market_data or {}).get("fear_greed", {}).get("score") if market_data else None
         in_session_window = (
             sb_enabled
@@ -1328,6 +1332,11 @@ class TradingLoop:
             "macd_hist_15m":      round(macd_15m["histogram"], 6) if macd_15m and macd_15m.get("histogram") is not None else None,
             "macd_bull_15m":      macd_15m.get("crossover_bullish",  False) if macd_15m else False,
             "macd_bear_15m":      macd_15m.get("crossover_bearish",  False) if macd_15m else False,
+            # News (CryptoPanic sentiment, 15m cached)
+            "news_label":         pair_news.get("label",            "no_data"),
+            "news_sentiment":     pair_news.get("sentiment",        0.0),
+            "news_posts":         pair_news.get("post_count",       0),
+            "news_headline":      pair_news.get("headlines",        [None])[0],
             # Session breakout
             "session_name":       active_session["name"]              if active_session else None,
             "session_emoji":      active_session["emoji"]             if active_session else None,

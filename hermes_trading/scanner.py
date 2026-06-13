@@ -18,6 +18,7 @@ from __future__ import annotations
 import math
 import time
 import httpx
+from hermes_trading.news import fetch_news_batch, symbol_from_pair
 
 from hermes_trading.adapters.candles import fetch as fetch_candles, closes as get_closes, highs as get_highs, lows as get_lows
 from hermes_trading.indicators import (
@@ -229,12 +230,17 @@ async def scan(universe: list[str], max_pairs: int, regime_vol: float,
 
 async def _score_all(universe: list[str], regime_vol: float, regime_info: dict) -> dict[str, float]:
     import asyncio
+    # Fetch news for all pairs in one batch before scoring (15m cache, graceful if no token)
+    symbols   = [symbol_from_pair(p) for p in universe]
+    news_data = await fetch_news_batch(symbols)   # {symbol: news_dict}
+
     # Score in parallel but cap concurrency to avoid hammering candle API
     sem = asyncio.Semaphore(10)
 
     async def _guarded(pair):
         async with sem:
-            return await _score_pair(pair, regime_vol, regime_info)
+            symbol = symbol_from_pair(pair)
+            return await _score_pair(pair, regime_vol, regime_info, news_data.get(symbol, {}))
 
     results = await asyncio.gather(*[_guarded(p) for p in universe], return_exceptions=True)
     return {
@@ -243,9 +249,10 @@ async def _score_all(universe: list[str], regime_vol: float, regime_info: dict) 
     }
 
 
-async def _score_pair(pair: str, regime_vol: float, regime_info: dict) -> float:
+async def _score_pair(pair: str, regime_vol: float, regime_info: dict,
+                      news: dict = None) -> float:
     """
-    Score a single pair 0–100 base + conviction + macro bonuses.
+    Score a single pair 0–100 base + conviction + macro bonuses + news bonus.
 
     Base score (0–100):
       30 pts  Liquidity       (log-normalised 24h USDT volume)
@@ -264,6 +271,12 @@ async def _score_pair(pair: str, regime_vol: float, regime_info: dict) -> float:
       +10/+20  BB squeeze → expansion
       +5/+15   VWAP alignment / band touch
       +15  Chart patterns (confidence-weighted)
+
+    News bonus (CryptoPanic, 15m cached, optional):
+      +10  Strong bullish sentiment (≥2 posts, net sentiment > 0.5)
+      +5   Mild bullish sentiment
+      -10  Strong bearish sentiment (≥2 posts, net sentiment < -0.5)
+      -5   Mild bearish sentiment
 
     Macro bonus (Total2/Total3 layer):
       +15  alt_season=True and pair is not BTC/ETH (alts outperforming)
@@ -471,12 +484,27 @@ async def _score_pair(pair: str, regime_vol: float, regime_info: dict) -> float:
         macro_bonus += 10
         macro_notes.append("macro_bear_bounce(+10)")
 
-    total = round(base_score + conviction + macro_bonus, 2)
-    all_notes = signals + macro_notes
+    # ── News bonus (CryptoPanic sentiment, optional) ──────────────────────
+    news_bonus = 0
+    news_notes = []
+    if news:
+        news_bonus = news.get("conviction_bonus", 0)
+        label      = news.get("label", "no_data")
+        posts      = news.get("post_count", 0)
+        headlines  = news.get("headlines", [])
+        if news_bonus != 0:
+            news_notes.append(f"news_{label}({news_bonus:+d}, {posts} posts)")
+            if headlines:
+                # Print top headline for visibility in logs
+                print(f"  [news] {pair}: {headlines[0][:80]}", flush=True)
+
+    total = round(base_score + conviction + macro_bonus + news_bonus, 2)
+    all_notes = signals + macro_notes + news_notes
     if all_notes:
         print(
             f"[scanner] {pair} base={base_score:.1f} "
-            f"+{conviction}conv +{macro_bonus}macro ({', '.join(all_notes)}) → {total}",
+            f"+{conviction}conv +{macro_bonus}macro +{news_bonus}news "
+            f"({', '.join(all_notes)}) → {total}",
             flush=True,
         )
     return total
