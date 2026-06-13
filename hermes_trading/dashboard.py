@@ -791,7 +791,7 @@ function renderPairs(heartbeats) {
     const pos      = hb.open_position;
     const posDir   = pos ? pos.direction : null;
     const posClass = posDir === 'long' ? 'pos-long' : posDir === 'short' ? 'pos-short' : 'pos-none';
-    const posLabel = posDir ? posDir.toUpperCase() : 'FLAT';
+    const posLabel = posDir ? posDir.toUpperCase() : '—';
     const rsi      = hb.rsi_15m ?? '—';
     const rng      = hb.rng_pos != null ? Math.round(hb.rng_pos * 100) + '%' : null;
     const tsAge    = hb.timestamp ? Math.round((Date.now() - new Date(hb.timestamp).getTime()) / 1000) : null;
