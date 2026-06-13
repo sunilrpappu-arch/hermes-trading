@@ -1318,11 +1318,11 @@ function renderSentiment(sentiment, data) {
       : totalScore >= 85  ? '#fbbf24'   // Greed warning
       : '#34d399';
     const scoreTrigger = totalScore == null ? ''
-      : totalScore <= 10  ? '🚨 CRITICAL — all entries halted'
-      : totalScore <= 18  ? '⚠️ WARNING — advisory banner shown'
-      : totalScore >= 93  ? '⚠️ WARNING — extreme bullish, reversal risk'
-      : totalScore >= 85  ? '⚠️ Bullish warning threshold'
-      : '✅ Normal — no triggers active';
+      : totalScore <= 10  ? '🚨 CRITICAL — entries halted, open longs closing'
+      : totalScore <= 18  ? '⚠️ Oversold — reduce sizes, wait for stabilisation'
+      : totalScore >= 93  ? '🔴 Extreme overbought — reversal likely, no new longs'
+      : totalScore >= 85  ? '⚠️ Overbought — tighten stops, avoid chasing entries'
+      : '✅ Clear — conditions normal';
 
     // MACD breadth — build per-pair data for clickable chips
     const hbList    = Object.values(data.heartbeats || {});
@@ -1400,7 +1400,7 @@ function renderSentiment(sentiment, data) {
         <span class="text-slate-500 text-xs">${scoreTrigger}</span>
         <span class="font-bold text-lg font-mono" style="color:${scoreColor}">${totalScore != null ? totalScore + '/100' : '—'}</span>
       </div>
-      <p class="text-slate-600 text-xs mt-1">Thresholds: ≤10 critical halt · ≤18 bearish warning · ≥85 bullish warning · ≥93 extreme bullish warning</p>
+      <p class="text-slate-600 text-xs mt-1">Thresholds: ≤10 entries halted · ≤18 reduce sizes · ≥85 tighten stops · ≥93 no new longs</p>
     </div>`;
   }
 
