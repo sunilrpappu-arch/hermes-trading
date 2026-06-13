@@ -258,7 +258,8 @@ async def _score_pair(pair: str, regime_vol: float, regime_info: dict) -> float:
       +10  RSI divergence (1H)
       +10  Breakout / breakdown (1H)
       +10  Liquidity grab (15m wick sweep)
-      +5   MACD crossover (1H)
+      +10  MACD crossover 1H aligned with RSI direction (−10 opposing)
+      +15  MACD crossover 15m aligned with RSI direction (−10 opposing)
       +10  Candlestick patterns
       +10/+20  BB squeeze → expansion
       +5/+15   VWAP alignment / band touch
@@ -269,11 +270,13 @@ async def _score_pair(pair: str, regime_vol: float, regime_info: dict) -> float:
       -15  btc_dom_rising=True and pair is not BTC/ETH (alts losing share)
       +10  macro_sentiment agrees with pair's RSI direction (bull → rsi<50, bear → rsi>50)
     """
-    candles_1h = await fetch_candles(pair, "1h", 100)
+    candles_1h  = await fetch_candles(pair, "1h", 100)
+    candles_15m = await fetch_candles(pair, "15m", 60)
     if len(candles_1h) < 20:
         return 0.0
 
     c             = get_closes(candles_1h)
+    c15m          = get_closes(candles_15m)
     current_price = c[-1]
 
     # 1. Liquidity (30 pts)
@@ -338,12 +341,46 @@ async def _score_pair(pair: str, regime_vol: float, regime_info: dict) -> float:
     except Exception:
         pass
 
-    # MACD crossover on 1H (+5)
+    # MACD crossover on 1H — direction-aware
+    # Bullish crossover aligns with dip setups (rsi<50); bearish with bounce setups (rsi>50)
+    # Opposing crossover = momentum headwind → penalise
     try:
-        m = compute_macd(c)
-        if m and (m["crossover_bullish"] or m["crossover_bearish"]):
-            conviction += 5
-            signals.append("macd_cross")
+        m1h = compute_macd(c)
+        if m1h:
+            bull_setup = rsi_val < 50   # likely long candidate
+            if m1h["crossover_bullish"] and bull_setup:
+                conviction += 10
+                signals.append("macd1h_bull✓")
+            elif m1h["crossover_bearish"] and not bull_setup:
+                conviction += 10
+                signals.append("macd1h_bear✓")
+            elif m1h["crossover_bullish"] and not bull_setup:
+                conviction -= 10
+                signals.append("macd1h_bull✗")
+            elif m1h["crossover_bearish"] and bull_setup:
+                conviction -= 10
+                signals.append("macd1h_bear✗")
+    except Exception:
+        pass
+
+    # MACD crossover on 15m — faster signal, same direction-awareness (+15 aligned, -10 opposing)
+    # 15m crossover is the entry-timing signal; 1H is the trend filter
+    try:
+        m15 = compute_macd(c15m) if len(c15m) >= 35 else None
+        if m15:
+            bull_setup = rsi_val < 50
+            if m15["crossover_bullish"] and bull_setup:
+                conviction += 15
+                signals.append("macd15m_bull✓")
+            elif m15["crossover_bearish"] and not bull_setup:
+                conviction += 15
+                signals.append("macd15m_bear✓")
+            elif m15["crossover_bullish"] and not bull_setup:
+                conviction -= 10
+                signals.append("macd15m_bull✗")
+            elif m15["crossover_bearish"] and bull_setup:
+                conviction -= 10
+                signals.append("macd15m_bear✗")
     except Exception:
         pass
 
