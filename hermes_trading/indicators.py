@@ -13,7 +13,9 @@ import math
 # ---------------------------------------------------------------------------
 
 def rsi(closes: list[float], period: int = 14) -> float:
-    """Standard Wilder RSI. Returns 50.0 when insufficient data."""
+    """Simple-average RSI (not Wilder's EMA-smoothed variant — internally consistent
+    across live and backtest, but values differ from charting tools by ~3-8pts in trends).
+    Returns 50.0 when insufficient data."""
     if len(closes) < period + 1:
         return 50.0
     deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
@@ -1110,11 +1112,12 @@ def dynamic_levels(
     sl_method = "atr_fallback"
 
     if is_long:
-        # SL below entry: highest structural low that is still below entry
-        candidates = [p - entry_price * sl_buffer_pct
+        # SL below entry: highest structural low that is still below entry.
+        # Buffer is relative to the structural level itself (not entry_price).
+        candidates = [p - p * sl_buffer_pct
                       for p in all_lows if p < entry_price * (1 - min_sl_pct)]
         if rng_low and rng_low < entry_price * (1 - min_sl_pct):
-            candidates.append(rng_low - entry_price * sl_buffer_pct)
+            candidates.append(rng_low - rng_low * sl_buffer_pct)
         # Pick closest (highest) candidate below entry
         valid_sl = [p for p in candidates if p < entry_price]
         if valid_sl:
@@ -1122,11 +1125,12 @@ def dynamic_levels(
             _range_sl_low  = (rng_low  - entry_price * sl_buffer_pct) if rng_low  else None
             sl_method      = "range_low"  if (_range_sl_low  and abs(sl_price - _range_sl_low)  < entry_price * 0.0005) else "swing_low"
     else:
-        # SL above entry: lowest structural high that is still above entry
-        candidates = [p + entry_price * sl_buffer_pct
+        # SL above entry: lowest structural high that is still above entry.
+        # Buffer is relative to the structural level itself (not entry_price).
+        candidates = [p + p * sl_buffer_pct
                       for p in all_highs if p > entry_price * (1 + min_sl_pct)]
         if rng_high and rng_high > entry_price * (1 + min_sl_pct):
-            candidates.append(rng_high + entry_price * sl_buffer_pct)
+            candidates.append(rng_high + rng_high * sl_buffer_pct)
         valid_sl = [p for p in candidates if p > entry_price]
         if valid_sl:
             sl_price        = min(valid_sl)

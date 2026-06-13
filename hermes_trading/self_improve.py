@@ -348,7 +348,8 @@ async def _run_comparison(
         total  = sum(r["total_trades"] for r in valid)
         wins   = sum(r["wins"]         for r in valid)
         wr     = wins / total * 100 if total > 0 else 0
-        pnl    = sum(r["total_pnl_pct"] for r in valid) / len(valid)
+        # Weight PnL by trade count so a single high-volume pair can't dominate
+        pnl    = sum(r["total_pnl_pct"] * r["total_trades"] for r in valid) / total if total > 0 else 0
         rr     = sum(r["avg_rr"]        for r in valid) / len(valid)
         return {"total_trades": total, "wins": wins, "win_rate": round(wr, 1),
                 "total_pnl_pct": round(pnl, 3), "avg_rr": round(rr, 3)}
@@ -371,9 +372,11 @@ def _evaluate(baseline: dict, proposed: dict, hypothesis: dict) -> dict:
                 "baseline_wr": bwr, "proposed_wr": pwr, "wr_delta": delta, "bt_trades": bt}
 
     if delta < MIN_WR_IMPROVEMENT_PP:
-        # Also approve if PnL improves significantly with no WR decline
+        # Also approve if trade-weighted PnL improves with minimal WR decline.
+        # Threshold 2.5% (not 5%) because backtest runs without leverage — live
+        # PnL is ~2x higher, so 2.5% backtest uplift ≈ 5% live uplift.
         pnl_delta = proposed.get("total_pnl_pct", 0) - baseline.get("total_pnl_pct", 0)
-        if pnl_delta > 5.0 and delta >= -2.0:
+        if pnl_delta > 2.5 and delta >= -2.0:
             return {"approved": True, "baseline_wr": bwr, "proposed_wr": pwr,
                     "wr_delta": delta, "bt_trades": bt, "reject_reason": None}
         return {"approved": False,

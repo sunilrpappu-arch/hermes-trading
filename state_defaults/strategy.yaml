@@ -1,4 +1,5 @@
-# v20 — Black swan / crash detection + Fear/Greed market sentiment meter
+# v21 — Code review fixes: drawdown formula, scanner RSI mismatch, BB squeeze/sideways,
+#        legacy SL trigger, pair_regime guard, self_improve PnL gate, backtest leverage
 # Each pair is classified independently (bull/bear/sideways) using its own 4H ADX + 50MA.
 # New in v11:
 #   - Bull regime: breakout long above resistance; false-breakout short; bearish RSI divergence short
@@ -67,4 +68,4 @@ take_profit_pct: 3.0
 stop_loss_pct:   1.8
 position_size_r: 0.05
 
-version: '20'
+version: '21'

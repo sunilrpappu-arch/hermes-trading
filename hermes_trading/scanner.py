@@ -301,10 +301,15 @@ async def _score_pair(pair: str, regime_vol: float, regime_info: dict) -> float:
     conviction = 0
     signals    = []
 
-    # RSI extreme (+10)
-    if rsi_val > 70 or rsi_val < 30:
+    # RSI approaching tradeable threshold (+10).
+    # Fire for RSI 30-40 (bull dip setup) and RSI 60-70 (bear short setup).
+    # Penalise RSI > 75 or < 25 — price is so extended the engine can't enter.
+    if (30 <= rsi_val <= 40) or (60 <= rsi_val <= 70):
         conviction += 10
-        signals.append(f"rsi_extreme({rsi_val:.0f})")
+        signals.append(f"rsi_approach({rsi_val:.0f})")
+    elif rsi_val > 75 or rsi_val < 25:
+        conviction -= 10
+        signals.append(f"rsi_too_extended({rsi_val:.0f})")
 
     # RSI divergence on 1H (+10)
     try:

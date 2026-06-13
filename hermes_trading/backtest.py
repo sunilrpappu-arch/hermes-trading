@@ -71,6 +71,10 @@ async def run_backtest(
     equity       = 0.0
     max_dd       = 0.0
 
+    # Mirror live leverage so PnL magnitudes match (self_improve compares backtest vs live)
+    lev_cfg   = strategy.get("leverage", {})
+    _bt_lev   = float(lev_cfg.get("normal", 1.5))
+
     bull_cfg  = strategy.get("bull",  {})
     bear_cfg  = strategy.get("bear",  {})
     sw_cfg    = strategy.get("sideways", {})
@@ -100,7 +104,7 @@ async def run_backtest(
             if hit_sl or hit_tp:
                 exit_price   = sl if hit_sl else tp
                 mult         = 1 if direction == "long" else -1
-                pnl_pct      = (exit_price - entry) / entry * mult
+                pnl_pct      = (exit_price - entry) / entry * mult * _bt_lev
                 close_reason = "stop_loss" if hit_sl else "take_profit"
                 sl_dist      = abs(entry - sl)
                 tp_dist      = abs(tp   - entry)

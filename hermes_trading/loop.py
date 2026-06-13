@@ -117,14 +117,11 @@ class PortfolioDrawdown:
     @classmethod
     def drawdown(cls) -> float:
         """Current drawdown as fraction of total capital (0.05 = 5%).
-        Uses total_capital as the base so early losses aren't inflated."""
-        if cls._peak_usdt > 0:
-            # Normal case: peak exists, measure from peak
-            dd_from_peak = (cls._peak_usdt - cls._current_usdt) / cls._peak_usdt
-        else:
-            # No profitable trades yet — measure loss directly against total capital
-            dd_from_peak = abs(min(cls._current_usdt, 0)) / max(cls._total_capital, 1)
-        return max(0.0, dd_from_peak)
+        Always normalises against total_capital so a win-then-loss sequence
+        can never produce a drawdown > 100% (the old peak-denominator formula
+        gave (30 - (-20)) / 30 = 166% which permanently halted trading)."""
+        swing = max(0.0, cls._peak_usdt - cls._current_usdt)
+        return swing / max(cls._total_capital, 1)
 
     @classmethod
     def is_halted(cls, cap: float) -> bool:
@@ -225,10 +222,12 @@ DEFAULT_STRATEGY = {
         "or_bars":         4,
         "swing_lookback":  20,
     },
-    # MTF is informational — logged on entry but no longer a hard gate
+    # MTF gate: require ≥N HTF signals before entering (0 = disabled).
+    # Live strategy.yaml sets require_signals: 1 — this default is only used
+    # if strategy.yaml is missing entirely (cold start with no state volume).
     "mtf": {
         "enabled":         True,
-        "require_signals": 0,
+        "require_signals": 1,
     },
     "trend_filter": {"enabled": True, "ma_period": 50},
     "liquidity_grab": {
@@ -742,10 +741,12 @@ class TradingLoop:
                         elif current_price <= tp_lvl:
                             should_close, close_reason = True, "take_profit"
                 else:
-                    # Legacy fallback for positions opened before v18
-                    if price_pct <= -stop_trigger:
+                    # Legacy fallback for positions opened before v18 (no sl_price/tp_price).
+                    # Use raw price_pct (not divided by leverage) — the SL was placed at
+                    # stop_loss_pct from entry, so that's the correct trigger distance.
+                    if price_pct <= -stop_loss_pct:
                         should_close, close_reason = True, "stop_loss"
-                    elif price_pct >= tp_trigger:
+                    elif price_pct >= take_profit_pct:
                         should_close, close_reason = True, "take_profit"
 
             if should_close:
@@ -813,7 +814,8 @@ class TradingLoop:
         # STEP 2: Trend recognition — per-pair regime + chart patterns
         # ------------------------------------------------------------------
         candles_4h_raw = candles.get("4h", [])
-        pair_regime    = classify_pair_regime(candles_4h_raw) if len(candles_4h_raw) >= 30 else "neutral"
+        # classify_pair_regime needs ≥50 bars for MA50; guard matches the internal requirement
+        pair_regime    = classify_pair_regime(candles_4h_raw) if len(candles_4h_raw) >= 50 else "neutral"
 
         # Chart patterns on 4H (trend-level) and 1H (entry-level)
         _empty_pat = {"patterns": [], "bullish_patterns": [], "bearish_patterns": [],
@@ -1074,8 +1076,10 @@ class TradingLoop:
             # A squeeze without expansion = consolidation still in progress.
             # A squeeze WITH expansion = highest-conviction breakout entry.
             # ------------------------------------------------------------------
-            if new_direction and bb["squeeze"] and not bb["expanding"]:
-                # Pure squeeze — no directional signal yet, skip entry
+            if new_direction and bb["squeeze"] and not bb["expanding"] and pair_regime != "sideways":
+                # Pure squeeze — no directional signal yet, skip entry.
+                # Exception: sideways regime *expects* a tight BB; blocking range entries
+                # there creates a catch-22 (squeeze IS the sideways condition).
                 print(f"  [BB SQUEEZE] {self.asset} {new_direction.upper()} held — "
                       f"bands squeezing (bw={bb['bb']['bandwidth']:.4f}), waiting for expansion",
                       flush=True)
