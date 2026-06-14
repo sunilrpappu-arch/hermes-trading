@@ -543,11 +543,13 @@ _HTML = r"""<!DOCTYPE html>
       <div class="rounded-lg bg-slate-800 p-4">
         <p class="text-slate-400 text-xs font-semibold uppercase mb-2">Senti-meter Signals → Action</p>
         <div class="space-y-1">
-          <div>≤ 10 → entries halted</div>
-          <div>≤ 18 → reduce sizes</div>
-          <div>18–85 → normal</div>
-          <div>≥ 85 → tighten stops</div>
-          <div>≥ 93 → no new longs</div>
+          <div>≤ 10 → <b>OVERSOLD</b> — entries halted, open longs closing</div>
+          <div>≤ 18 → <b>BEARISH</b> — reduce sizes, wait for stabilisation</div>
+          <div>19–35 → <b>BEARISH</b> — caution, favour shorts</div>
+          <div>36–64 → <b>SIDEWAYS</b> — normal conditions</div>
+          <div>65–84 → <b>BULLISH</b> — normal conditions, favour longs</div>
+          <div>85–92 → <b>OVERBOUGHT</b> — tighten stops, avoid chasing entries</div>
+          <div>≥ 93 → <b>OVERBOUGHT</b> — reversal likely, no new longs</div>
         </div>
       </div>
 
