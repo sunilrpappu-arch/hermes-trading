@@ -176,8 +176,15 @@ async def _fetch_feed(url: str) -> list[dict]:
         summary = _text(item, ["description", "summary", "atom:summary"], ns)
         pub_str = _text(item, ["pubDate", "published", "atom:published"], ns)
         ts      = _parse_date(pub_str)
+        # Extract URL — RSS uses <link>, Atom uses href attribute on <link>
+        link_el = item.find("link")
+        link = ""
+        if link_el is not None:
+            link = (link_el.text or "").strip() or link_el.get("href", "")
+        if not link:
+            link = _text(item, ["atom:link"], ns) or ""
         if title:
-            articles.append({"title": title, "summary": summary or "", "published_ts": ts})
+            articles.append({"title": title, "summary": summary or "", "published_ts": ts, "url": link})
     return articles
 
 
@@ -225,6 +232,7 @@ def _score_symbol(symbol: str, articles: list[dict]) -> dict:
     )
 
     matched_headlines = []
+    matched_urls      = []
     scores = []
 
     for article in articles:
@@ -242,6 +250,7 @@ def _score_symbol(symbol: str, articles: list[dict]) -> dict:
         scores.append(net)
         if len(matched_headlines) < 3:
             matched_headlines.append(article["title"][:100])
+            matched_urls.append(article.get("url", ""))
 
     if not scores:
         return _empty()
@@ -265,6 +274,7 @@ def _score_symbol(symbol: str, articles: list[dict]) -> dict:
         "sentiment":        round(avg, 3),
         "post_count":       n,
         "headlines":        matched_headlines,
+        "headline_urls":    matched_urls,
         "conviction_bonus": bonus,
         "label":            label,
     }

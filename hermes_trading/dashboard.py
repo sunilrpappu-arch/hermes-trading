@@ -1204,7 +1204,8 @@ function renderNews(heartbeats) {
     const sym       = asset.replace('/USDT', '');
     const color     = label === 'bullish' ? '#34d399' : label === 'bearish' ? '#f87171' : '#64748b';
     const icon      = label === 'bullish' ? '▲' : label === 'bearish' ? '▼' : '·';
-    headlines.forEach(h => items.push({ sym, color, icon, headline: h, label }));
+    const urls = hb.news_headline_urls || [];
+    headlines.forEach((h, i) => items.push({ sym, color, icon, headline: h, url: urls[i] || '', label }));
   }
 
   // Sort: bullish first, then bearish, then neutral
@@ -1234,29 +1235,43 @@ function _renderNewsItems(items, activeSym) {
   if (activeSym) {
     const mine   = items.filter(i => i.sym === activeSym);
     const others = items.filter(i => i.sym !== activeSym);
-    const makeRow = (item, dim) => `
+    const makeRow = (item, dim) => {
+      const headlineHtml = item.url
+        ? `<a href="${item.url}" target="_blank" rel="noopener noreferrer"
+              class="text-slate-300 text-xs leading-relaxed hover:text-indigo-400 hover:underline transition-colors"
+              title="Open article">${item.headline} ↗</a>`
+        : `<span class="text-slate-300 text-xs leading-relaxed">${item.headline}</span>`;
+      return `
       <div class="flex items-start gap-2 py-1 border-b border-slate-800 last:border-0"
            style="${dim ? 'opacity:0.35' : ''}">
         <span class="font-bold text-xs font-mono shrink-0 w-12 pt-0.5 cursor-pointer"
               style="color:${item.color}" onclick="loadChart('${item.sym}/USDT')"
               title="Load ${item.sym} chart">${item.sym}</span>
         <span style="color:${item.color};font-size:10px" class="shrink-0 pt-0.5">${item.icon}</span>
-        <span class="text-slate-300 text-xs leading-relaxed">${item.headline}</span>
+        ${headlineHtml}
       </div>`;
+    };
     const mineHtml   = mine.map(i => makeRow(i, false)).join('');
     const othersHtml = others.map(i => makeRow(i, true)).join('');
     const divider    = others.length && mine.length
       ? `<p class="text-slate-700 text-xs pt-1 pb-0.5">— other pairs —</p>` : '';
     rows = mineHtml + divider + othersHtml;
   } else {
-    rows = items.map(item => `
+    rows = items.map(item => {
+      const headlineHtml = item.url
+        ? `<a href="${item.url}" target="_blank" rel="noopener noreferrer"
+              class="text-slate-300 text-xs leading-relaxed hover:text-indigo-400 hover:underline transition-colors"
+              title="Open article">${item.headline} ↗</a>`
+        : `<span class="text-slate-300 text-xs leading-relaxed">${item.headline}</span>`;
+      return `
       <div class="flex items-start gap-2 py-1 border-b border-slate-800 last:border-0">
         <span class="font-bold text-xs font-mono shrink-0 w-12 pt-0.5 cursor-pointer"
               style="color:${item.color}" onclick="loadChart('${item.sym}/USDT')"
               title="Load ${item.sym} chart">${item.sym}</span>
         <span style="color:${item.color};font-size:10px" class="shrink-0 pt-0.5">${item.icon}</span>
-        <span class="text-slate-300 text-xs leading-relaxed">${item.headline}</span>
-      </div>`).join('');
+        ${headlineHtml}
+      </div>`;
+    }).join('');
   }
 
   panel.innerHTML = rows;
