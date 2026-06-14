@@ -437,80 +437,41 @@ async def _run_with_dashboard(universe, total_capital, force_pairs=None):
 
 async def _graceful_shutdown():
     """
-    Called on SIGTERM — mark-to-market all open positions, log them to
-    trades.jsonl, send Telegram notification, then exit cleanly.
-    Railway sends SIGTERM ~10s before SIGKILL, so keep this fast.
+    Called on SIGTERM — notify via Telegram that a redeploy is happening
+    and positions will resume. Position files are left intact on the
+    persistent volume so the new deploy picks them up via _load_position().
+    We do NOT log fake closes — that would skew metrics and create
+    duplicate records when the position resumes.
     """
-    import time, json as _json
-    from hermes_trading.loop import TradingLoop, TRADES_FILE
-    from hermes_trading.notify import send_trade_email, _send_telegram
+    import json as _json
+    from hermes_trading.notify import _send_telegram
 
     position_files = list(STATE_DIR.glob("position_*.json"))
     if not position_files:
         print("[shutdown] no open positions — clean exit", flush=True)
         return
 
-    closed = []
+    resuming = []
     for pf in position_files:
         try:
             pos = _json.loads(pf.read_text())
-        except Exception:
-            continue
-
-        asset     = pos.get("asset", "?")
-        direction = pos.get("direction", "long")
-        entry     = pos.get("entry_price", 0)
-        deployed  = pos.get("usdt_deployed", 0)
-        leverage  = pos.get("leverage", 1)
-
-        # Fetch current price for mark-to-market
-        try:
-            from hermes_trading.adapters.exchange import fetch_ticker
-            ticker  = await fetch_ticker(asset)
-            current = float(ticker.get("last") or ticker.get("close") or entry)
-        except Exception:
-            current = entry   # fallback: flat PnL
-
-        pnl_pct = (current - entry) / entry if direction == "long" else (entry - current) / entry
-        comm    = round(deployed * leverage * 0.001 * 2, 6)
-        gross   = round(pnl_pct * deployed, 4)
-        net     = round(gross - comm, 4)
-
-        trade = {
-            **pos,
-            "exit_price":      current,
-            "exit_time":       int(time.time()),
-            "pnl_pct":         round(pnl_pct, 6),
-            "pnl_usdt":        gross,
-            "commission_usdt": comm,
-            "slippage_usdt":   0.0,
-            "net_pnl_usdt":    net,
-            "close_reason":    "shutdown",
-        }
-
-        # Append to trades.jsonl
-        try:
-            with open(TRADES_FILE, "a") as f:
-                f.write(_json.dumps(trade) + "\n")
-            print(f"[shutdown] logged {asset} {direction} pnl={pnl_pct:+.3%} → trades.jsonl", flush=True)
-        except Exception as e:
-            print(f"[shutdown] failed to log {asset}: {e}", flush=True)
-
-        # Remove position file so it doesn't re-open on restart
-        pf.unlink(missing_ok=True)
-        closed.append(f"{asset} {direction.upper()} {pnl_pct:+.2%}")
-
-    if closed:
-        try:
-            _send_telegram(
-                f"⚡ <b>Hermes Shutdown</b>\n\n"
-                f"Redeploying — {len(closed)} position(s) closed at market:\n"
-                + "\n".join(f"  · {c}" for c in closed)
-            )
+            asset     = pos.get("asset", "?")
+            direction = pos.get("direction", "?").upper()
+            entry     = pos.get("entry_price", 0)
+            resuming.append(f"{asset} {direction} @ ${entry:.6f}")
         except Exception:
             pass
 
-    print(f"[shutdown] graceful shutdown complete — {len(closed)} positions logged", flush=True)
+    print(f"[shutdown] redeploying with {len(resuming)} open position(s) — will resume on restart", flush=True)
+
+    try:
+        _send_telegram(
+            f"⚡ <b>Hermes Redeploying</b>\n\n"
+            f"{len(resuming)} position(s) will resume after restart:\n"
+            + "\n".join(f"  · {r}" for r in resuming)
+        )
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

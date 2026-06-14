@@ -128,6 +128,8 @@ def _trade_pnl_usdt(t: dict) -> float:
 
 
 def _portfolio_stats(trades: list[dict]) -> dict:
+    # Exclude shutdown trades — they are redeploy artifacts, not real closes
+    trades = [t for t in trades if t.get("close_reason") != "shutdown"]
     if not trades:
         return {"total_trades": 0, "wins": 0, "losses": 0, "win_rate": 0,
                 "total_pnl_usdt": 0.0, "total_pnl_pct": 0.0,
@@ -169,7 +171,8 @@ def _portfolio_stats(trades: list[dict]) -> dict:
 
 
 def _cumulative_pnl(trades: list[dict]) -> list[dict]:
-    """Sorted by exit_time, cumulative PnL in USDT."""
+    """Sorted by exit_time, cumulative PnL in USDT. Excludes shutdown artifacts."""
+    trades = [t for t in trades if t.get("close_reason") != "shutdown"]
     sorted_trades = sorted(trades, key=lambda t: t.get("exit_time", 0))
     running = 0.0
     points  = []
@@ -220,7 +223,7 @@ async def api_state():
         "drawdown":      drawdown,
         "cum_pnl":       cum_pnl,
         "heartbeats":    heartbeats,
-        "recent_trades": list(reversed(trades)),  # all trades, newest first — paginated client-side
+        "recent_trades": list(reversed([t for t in trades if t.get("close_reason") != "shutdown"])),
         "sentiment":        sentiment,
         "active_features":  _read_active_features(),
         "strategy_notes":   _read_strategy_notes(),
