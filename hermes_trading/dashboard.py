@@ -476,7 +476,83 @@ _HTML = r"""<!DOCTYPE html>
     <span id="regime-badge" class="badge">…</span>
     <span id="strategy-ver" class="text-slate-500 text-xs">v?</span>
     <div id="active-features" class="flex flex-wrap gap-1"></div>
+    <button onclick="document.getElementById('strategy-modal').classList.remove('hidden')"
+      class="px-3 py-1 rounded-lg text-xs bg-slate-700 border border-slate-600 text-slate-300 hover:text-white hover:bg-slate-600 transition">
+      📋 Strategy
+    </button>
     <span id="refresh-spinner" class="spinner"></span>
+  </div>
+</div>
+
+<!-- Strategy Quick Reference Modal -->
+<div id="strategy-modal" class="hidden fixed inset-0 z-50 flex items-start justify-center pt-10 px-4"
+  style="background:rgba(0,0,0,0.75)" onclick="if(event.target===this)this.classList.add('hidden')">
+  <div class="relative w-full max-w-3xl rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl overflow-y-auto max-h-[85vh] p-6">
+    <button onclick="document.getElementById('strategy-modal').classList.add('hidden')"
+      class="absolute top-4 right-4 text-slate-500 hover:text-white text-xl leading-none">✕</button>
+    <h2 class="text-white font-bold text-lg mb-4">⚡ Hermes Strategy · Quick Reference</h2>
+    <div class="space-y-4 text-sm text-slate-300">
+
+      <div class="rounded-lg bg-slate-800 p-4">
+        <p class="text-slate-400 text-xs font-semibold uppercase mb-2">Regime Detection (4H)</p>
+        <div class="space-y-1">
+          <div><span class="text-green-400 font-semibold">Bull</span> — Price &gt; 50MA &amp; ADX ≥ 20 · Longs preferred · Shorts only at liquidity grabs</div>
+          <div><span class="text-red-400 font-semibold">Bear</span> — Price &lt; 50MA &amp; ADX ≥ 20 · Shorts preferred · Longs only at liquidity grabs</div>
+          <div><span class="text-yellow-400 font-semibold">Sideways</span> — ADX &lt; 20 · Mean-reversion at range extremes (bottom 20% long, top 20% short) · MTF = 0</div>
+        </div>
+      </div>
+
+      <div class="rounded-lg bg-slate-800 p-4">
+        <p class="text-slate-400 text-xs font-semibold uppercase mb-2">Entry Gates (all must pass)</p>
+        <div class="space-y-1">
+          <div>1. <span class="text-white">Scanner score</span> — Bull long ≥ 35 · Bear short ≥ 60</div>
+          <div>2. <span class="text-white">MTF gate</span> — ≥ 1 higher-TF signal (4H MACD, 4H MA, 1H RSI div, 1H MACD) · waived sideways / liq-grabs</div>
+          <div>3. <span class="text-white">Pattern gate</span> — bearish pattern blocks longs, bullish blocks shorts · bypassed if RSI &lt; 25 (long) or &gt; 75 (short)</div>
+          <div>4. <span class="text-white">Senti-meter</span> — ≤ 10 entries halted · ≥ 93 no new longs</div>
+          <div>5. <span class="text-white">Drawdown / cooldown</span> — 10% per-pair cap · 8% portfolio cap · 30m cooldown after stop-loss</div>
+          <div>6. <span class="text-white">Daily loss</span> — halted if down &gt; 3% on the day</div>
+        </div>
+      </div>
+
+      <div class="rounded-lg bg-slate-800 p-4">
+        <p class="text-slate-400 text-xs font-semibold uppercase mb-2">TP / SL Logic</p>
+        <div class="space-y-1">
+          <div><span class="text-white">Default</span> — TP 3% · SL 1.8% · min R:R 1.0×</div>
+          <div><span class="text-white">Pattern TP</span> — measured move from neckline/breakout · min R:R relaxed to 0.75× if confidence ≥ 70%</div>
+          <div><span class="text-white">Dynamic levels</span> — swing high/low · Fibonacci · VWAP bands override defaults when R:R improves</div>
+          <div><span class="text-white">Session breakout</span> — Asia/London/US open windows · requires BB expansion + volume ≥ 1.5× avg</div>
+        </div>
+      </div>
+
+      <div class="rounded-lg bg-slate-800 p-4">
+        <p class="text-slate-400 text-xs font-semibold uppercase mb-2">Leverage (dynamic)</p>
+        <div class="space-y-1">
+          <div>Sideways / Calm → 2× · Normal → 1.5× · Volatile / Extreme → 1× · Hard cap 3×</div>
+        </div>
+      </div>
+
+      <div class="rounded-lg bg-slate-800 p-4">
+        <p class="text-slate-400 text-xs font-semibold uppercase mb-2">Senti-meter Signals → Action</p>
+        <div class="space-y-1">
+          <div>≤ 10 → entries halted</div>
+          <div>≤ 18 → reduce sizes</div>
+          <div>18–85 → normal</div>
+          <div>≥ 85 → tighten stops</div>
+          <div>≥ 93 → no new longs</div>
+        </div>
+      </div>
+
+      <div class="rounded-lg bg-slate-800 p-4">
+        <p class="text-slate-400 text-xs font-semibold uppercase mb-2">Self-Improvement Cycle</p>
+        <div class="space-y-1">
+          <div><span class="text-white">Every 5 trades</span> — reflection: WR, avg R:R, regime breakdown, pattern performance</div>
+          <div><span class="text-white">After 8h silence</span> — downtime: idle diagnosis, OOS backtest, R:R bleed check, shadow trade review</div>
+          <div><span class="text-white">R:R bleed check</span> — if pattern TP WR lags structural TP by &gt; 10pp (≥ 5 samples) → flags relaxed 0.75× R:R</div>
+          <div><span class="text-white">Shadow trading</span> — blocked setups tracked 48h forward to validate gates</div>
+        </div>
+      </div>
+
+    </div>
   </div>
 </div>
 
