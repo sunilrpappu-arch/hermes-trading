@@ -86,7 +86,28 @@ async def run_downtime(
             tick = "✅" if wr >= 55 else "⚠️" if wr >= 40 else "❌"
             lines.append(f"  {tick} {label}: {n} trades · WR {wr:.0f}% · PnL {pnl:+.2f}%")
 
-    # 4. Shadow trade evaluation
+    # 4. R:R bleed analysis
+    rr_summary = _rr_bleed_analysis(all_trades)
+    if rr_summary:
+        lines.append("\n📐 <b>R:R bleed check</b>")
+        for bucket, stats in rr_summary["buckets"].items():
+            wr   = stats["win_rate"]
+            n    = stats["count"]
+            pnl  = stats["total_pnl"]
+            tick = "✅" if wr >= 55 else "⚠️" if wr >= 40 else "❌"
+            lines.append(f"  {tick} R:R {bucket}: {n} trades · WR {wr:.0f}% · PnL {pnl:+.2f}%")
+        if rr_summary.get("pattern_vs_structural"):
+            pv = rr_summary["pattern_vs_structural"]
+            lines.append(
+                f"  Pattern TP: WR {pv['pattern_wr']:.0f}% ({pv['pattern_n']} trades) "
+                f"vs Structural TP: WR {pv['structural_wr']:.0f}% ({pv['structural_n']} trades)"
+            )
+            if pv["pattern_wr"] < pv["structural_wr"] - 10 and pv["pattern_n"] >= 5:
+                lines.append("  ⚠️ Pattern TPs underperforming — relaxed R:R may be bleeding WR")
+            elif pv["pattern_wr"] > pv["structural_wr"] + 5 and pv["pattern_n"] >= 5:
+                lines.append("  ✅ Pattern TPs outperforming structural levels")
+
+    # 5. Shadow trade evaluation
     shadow_summary = _evaluate_shadow_trades(all_trades)
     if shadow_summary:
         lines.append("\n👻 <b>Shadow trade outcomes</b>")
@@ -320,6 +341,62 @@ def _feature_cohort_analysis(all_trades: list[dict]) -> dict | None:
         }
 
     return result or None
+
+
+def _rr_bleed_analysis(all_trades: list[dict]) -> dict | None:
+    """
+    Check whether lower R:R trades (e.g. pattern-relaxed 0.75×) are dragging
+    down overall win rate vs trades that achieved full structural R:R.
+
+    Returns:
+      {
+        buckets: { "<0.75": {...}, "0.75-1.0": {...}, "1.0-1.5": {...}, "≥1.5": {...} }
+        pattern_vs_structural: { pattern_wr, pattern_n, structural_wr, structural_n }
+      }
+    """
+    closed = [t for t in all_trades if t.get("rr_ratio") is not None and t.get("pnl_pct") is not None]
+    if len(closed) < 5:
+        return None
+
+    def _bucket(rr):
+        if rr < 0.75:   return "<0.75"
+        if rr < 1.0:    return "0.75–1.0"
+        if rr < 1.5:    return "1.0–1.5"
+        return "≥1.5"
+
+    buckets: dict = {}
+    for t in closed:
+        b    = _bucket(t["rr_ratio"])
+        win  = (t["pnl_pct"] or 0) > 0
+        pnl  = (t["pnl_pct"] or 0) * 100
+        buckets.setdefault(b, {"count": 0, "wins": 0, "total_pnl": 0.0})
+        buckets[b]["count"]     += 1
+        buckets[b]["wins"]      += int(win)
+        buckets[b]["total_pnl"] += pnl
+
+    for b, s in buckets.items():
+        s["win_rate"]   = s["wins"] / s["count"] * 100 if s["count"] else 0
+        s["total_pnl"]  = round(s["total_pnl"], 2)
+
+    # Pattern TP vs structural/fib TP
+    pat_trades  = [t for t in closed if (t.get("tp_method") or "").startswith("pattern_")]
+    str_trades  = [t for t in closed if not (t.get("tp_method") or "").startswith("pattern_")]
+
+    def _wr(trades):
+        if not trades: return 0.0
+        return sum(1 for t in trades if (t.get("pnl_pct") or 0) > 0) / len(trades) * 100
+
+    pv = {
+        "pattern_wr":    round(_wr(pat_trades), 1),
+        "pattern_n":     len(pat_trades),
+        "structural_wr": round(_wr(str_trades), 1),
+        "structural_n":  len(str_trades),
+    }
+
+    return {
+        "buckets": {k: buckets[k] for k in ("<0.75", "0.75–1.0", "1.0–1.5", "≥1.5") if k in buckets},
+        "pattern_vs_structural": pv if pat_trades or str_trades else None,
+    }
 
 
 def _evaluate_shadow_trades(all_live_trades: list[dict]) -> dict | None:
