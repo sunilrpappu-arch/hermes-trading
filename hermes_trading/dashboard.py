@@ -931,14 +931,22 @@ function renderPairs(heartbeats) {
       const rrColor  = rrRatio >= 2.0 ? '#34d399' : rrRatio >= 1.0 ? '#fbbf24' : '#f87171';
       const signals    = (pos.htf_signals || []).join(', ') || null;
       const regime     = pos.pair_regime || '—';
+      const nearTpSl   = pos.near_tp_sl || null;
       // Use saved override if present, else fall back to position's entry leverage
       const lev_override = _savedControls.leverage_overrides && _savedControls.leverage_overrides[asset];
       const pos_leverage = parseFloat(lev_override || pos.leverage || 1.0);
-      const borderCol  = pos.direction === 'long' ? '#065f46' : '#7f1d1d';
+      const borderCol  = nearTpSl ? '#b45309'
+                       : pos.direction === 'long' ? '#065f46' : '#7f1d1d';
+      const nearWarning = nearTpSl
+        ? `<div style="background:#451a03;border:1px solid #b45309;border-radius:6px;padding:6px 10px;margin-bottom:8px;font-size:11px;color:#fbbf24">
+             ⚠️ <b>Close to ${nearTpSl.toUpperCase()}</b> — redeploy gap risk. Consider closing manually if ${nearTpSl === 'tp' ? 'target' : 'stop'} is imminent.
+           </div>`
+        : '';
 
       return `
       <div class="rounded-lg px-3 py-3" style="background:#0f1a2e;border:1px solid ${borderCol};cursor:pointer"
            onclick="loadChart('${asset}')" title="Click to load chart">
+        ${nearWarning}
         <div class="flex items-center justify-between mb-2">
           <div class="flex items-center gap-2">
             <a href="${tvUrl(asset)}" target="_blank" class="font-bold text-white text-sm hover:text-indigo-400 transition-colors" title="Open on TradingView">${asset.replace('/USDT','')}/USDT ↗</a>

@@ -513,25 +513,61 @@ async def _graceful_shutdown():
         print("[shutdown] no open positions — clean exit", flush=True)
         return
 
+    WARN_PCT = 0.40   # warn if within 40% of the way to TP or SL
+
     resuming = []
+    warnings = []
     for pf in position_files:
         try:
-            pos = _json.loads(pf.read_text())
+            pos       = _json.loads(pf.read_text())
             asset     = pos.get("asset", "?")
             direction = pos.get("direction", "?").upper()
-            entry     = pos.get("entry_price", 0)
-            resuming.append(f"{asset} {direction} @ ${entry:.6f}")
+            entry     = float(pos.get("entry_price", 0) or 0)
+            sl        = float(pos.get("sl_price", 0) or 0)
+            tp        = float(pos.get("tp_price", 0) or 0)
+
+            line = f"{asset} {direction} @ ${entry:.6f}"
+
+            # Check proximity to TP/SL using last known price from heartbeat
+            safe   = asset.replace("/", "_")
+            hb_file = STATE_DIR / f"heartbeat_{safe}.json"
+            if hb_file.exists() and sl and tp and entry:
+                try:
+                    hb    = _json.loads(hb_file.read_text())
+                    price = float(hb.get("price", 0) or 0)
+                    if price:
+                        total_range = abs(tp - entry)
+                        total_sl    = abs(sl - entry)
+                        dist_tp = abs(tp - price) / total_range if total_range else 1
+                        dist_sl = abs(sl - price) / total_sl   if total_sl   else 1
+                        if dist_tp <= WARN_PCT:
+                            pct_away = abs(tp - price) / price * 100
+                            line += f" ⚠️ {pct_away:.2f}% from TP"
+                            warnings.append(f"⚠️ <b>{asset}</b> is {pct_away:.2f}% from TP — consider closing manually")
+                            pos["near_tp_sl"] = "tp"
+                        elif dist_sl <= WARN_PCT:
+                            pct_away = abs(sl - price) / price * 100
+                            line += f" ⚠️ {pct_away:.2f}% from SL"
+                            warnings.append(f"⚠️ <b>{asset}</b> is {pct_away:.2f}% from SL — consider closing manually")
+                            pos["near_tp_sl"] = "sl"
+                        else:
+                            pos.pop("near_tp_sl", None)
+                        pf.write_text(_json.dumps(pos, indent=2))
+                except Exception:
+                    pass
+
+            resuming.append(line)
         except Exception:
             pass
 
     print(f"[shutdown] redeploying with {len(resuming)} open position(s) — will resume on restart", flush=True)
 
     try:
-        _send_telegram(
-            f"⚡ <b>Hermes Redeploying</b>\n\n"
-            f"{len(resuming)} position(s) will resume after restart:\n"
-            + "\n".join(f"  · {r}" for r in resuming)
-        )
+        body = (f"{len(resuming)} position(s) will resume after restart:\n"
+                + "\n".join(f"  · {r}" for r in resuming))
+        if warnings:
+            body += "\n\n" + "\n".join(warnings)
+        _send_telegram(f"⚡ <b>Hermes Redeploying</b>\n\n" + body)
     except Exception:
         pass
 
