@@ -484,7 +484,6 @@ _HTML = r"""<!DOCTYPE html>
     <span id="mode-badge" class="badge bg-slate-700 text-slate-300">…</span>
     <span id="regime-badge" class="badge">…</span>
     <span id="strategy-ver" class="text-slate-500 text-xs">v?</span>
-    <div id="active-features" class="flex flex-wrap gap-1"></div>
     <button onclick="document.getElementById('strategy-modal').classList.remove('hidden')"
       class="px-3 py-1 rounded-lg text-xs bg-slate-700 border border-slate-600 text-slate-300 hover:text-white hover:bg-slate-600 transition">
       📋 Strategy
@@ -549,6 +548,11 @@ _HTML = r"""<!DOCTYPE html>
           <div>≥ 85 → tighten stops</div>
           <div>≥ 93 → no new longs</div>
         </div>
+      </div>
+
+      <div class="rounded-lg bg-slate-800 p-4">
+        <p class="text-slate-400 text-xs font-semibold uppercase mb-2">Active Modules</p>
+        <div id="active-features" class="flex flex-wrap gap-2"></div>
       </div>
 
       <div id="strategy-notes-section" class="rounded-lg bg-slate-800 p-4 hidden">
