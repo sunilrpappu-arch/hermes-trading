@@ -192,6 +192,18 @@ async def run_all(universe: list[str], total_capital: float, force_pairs: list[s
                 del queues[pair]
                 del tasks[pair]
 
+        # 3b. Always keep pairs that have a persisted position file (survives redeploys)
+        import json as _pjson
+        for pf in STATE_DIR.glob("position_*.json"):
+            try:
+                pos = _pjson.loads(pf.read_text())
+                pair = pos.get("asset")
+                if pair and pair not in selected:
+                    print(f"[coordinator] restoring {pair} — position file found on volume", flush=True)
+                    selected.append(pair)
+            except Exception:
+                pass
+
         # 4. Spin up new loops
         capital_per = regime_info.get("capital_per_pair", total_capital / max(len(selected), 1))
         for pair in selected:
