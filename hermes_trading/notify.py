@@ -74,6 +74,38 @@ def send_trade_email(trade: dict, stats: dict):
     _send_telegram(msg)
 
 
+def send_entry_notification(trade: dict):
+    """Send a trade-open notification via Telegram."""
+    asset     = trade.get("asset", "?")
+    direction = trade.get("direction", "?").upper()
+    entry     = trade.get("entry_price", 0)
+    sl        = trade.get("sl_price", 0)
+    tp        = trade.get("tp_price", 0)
+    rr        = trade.get("rr_ratio", 0)
+    regime    = trade.get("regime_at_entry", "?")
+    tp_method = trade.get("tp_method", "?")
+    mode      = trade.get("mode", "paper")
+    lev       = trade.get("leverage", 1)
+    score     = trade.get("conviction_score", None)
+    mtf       = trade.get("mtf_signals", [])
+    mtf_str   = " · ".join(mtf[:3]) if mtf else "—"
+
+    arrow = "↑" if direction == "LONG" else "↓"
+    msg = (
+        f"⚡ <b>Hermes [{mode.upper()}] Entry</b> {arrow}\n\n"
+        f"<b>{asset}</b>  {direction}  ·  {regime}  ·  {lev}x\n\n"
+        f"<b>Entry:</b> ${entry:.6f}\n"
+        f"<b>SL:</b> ${sl:.6f}\n"
+        f"<b>TP:</b> ${tp:.6f}  ({tp_method})\n"
+        f"<b>R:R:</b> {rr:.2f}x\n"
+    )
+    if score is not None:
+        msg += f"<b>Score:</b> {score:.0f}/100\n"
+    if mtf_str != "—":
+        msg += f"<b>MTF:</b> {mtf_str}\n"
+    _send_telegram(msg)
+
+
 def send_reflection_notification(summary: str):
     """Send a reflection-cycle summary via Telegram."""
     _send_telegram(f"⚡ <b>Hermes Reflection</b>\n\n{summary}")

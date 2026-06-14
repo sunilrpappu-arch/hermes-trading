@@ -43,7 +43,7 @@ from hermes_trading.indicators import (
     classify_pair_regime,
 )
 from hermes_trading.adapters.candles import closes as get_closes, highs as get_highs, lows as get_lows
-from hermes_trading.notify import send_trade_email, send_reflection_notification
+from hermes_trading.notify import send_trade_email, send_reflection_notification, send_entry_notification
 from hermes_trading.session_windows import current_session, session_volume_multiplier
 from hermes_trading.news import fetch_news, symbol_from_pair
 from hermes_trading.downtime import (
@@ -1334,6 +1334,11 @@ class TradingLoop:
                     "mode":               "live" if is_live() else "paper",
                 }
                 self._save_position()
+                send_entry_notification({
+                    **self.open_position,
+                    "conviction_score": conviction,
+                    "mtf_signals":      htf_reasons,
+                })
                 signals_str = ", ".join(htf_reasons + ([lq_note] if lq_note else []))
                 lvl_str = ""
                 if _dyn_levels:
