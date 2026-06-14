@@ -1226,30 +1226,32 @@ def dynamic_levels(
         if fib_tp > 0:
             fib_tps.append((fib_tp, label))
 
-    # ── Pattern key_level as priority TP ─────────────────────────────────
-    # Use the confirming pattern's neckline/breakout target as the first TP
-    # candidate — it's a market-derived target more meaningful than pure structure.
+    # ── Pattern tp_level as priority TP ──────────────────────────────────
+    # High-confidence patterns (≥0.70) get a relaxed min_rr of 0.75 — the
+    # measured move IS the natural target; don't discard it just to chase a
+    # swing high that satisfies 1:1 but has no pattern significance.
     _pat_tp_price  = None
     _pat_tp_method = None
     for _pat_src in (patterns_1h, patterns_4h):
         if not _pat_src:
             continue
-        # Use tp_level (measured move target), not key_level (entry trigger)
         _best = _pat_src.get("best_bullish") if is_long else _pat_src.get("best_bearish")
         if _best and isinstance(_best, dict):
-            _tl = _best.get("tp_level")
+            _tl   = _best.get("tp_level")
+            _conf = _best.get("confidence", 0)
+            _pat_min_rr = 0.75 if _conf >= 0.70 else min_rr
             if _tl:
                 if is_long and _tl > entry_price:
                     _dist = _tl - entry_price
-                    if _dist / sl_dist >= min_rr:
+                    if _dist / sl_dist >= _pat_min_rr:
                         _pat_tp_price  = _tl
-                        _pat_tp_method = f"pattern_{_best['name']}"
+                        _pat_tp_method = f"pattern_{_best['name']}(conf={_conf:.0%})"
                         break
                 elif not is_long and _tl < entry_price:
                     _dist = entry_price - _tl
-                    if _dist / sl_dist >= min_rr:
+                    if _dist / sl_dist >= _pat_min_rr:
                         _pat_tp_price  = _tl
-                        _pat_tp_method = f"pattern_{_best['name']}"
+                        _pat_tp_method = f"pattern_{_best['name']}(conf={_conf:.0%})"
                         break
 
     if _pat_tp_price is not None:
