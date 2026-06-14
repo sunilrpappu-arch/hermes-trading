@@ -15,6 +15,7 @@ Scoring criteria (0–100):
   20 pts  Volatility fit  (pair's vol vs regime vol — not too noisy, not too flat)
 """
 from __future__ import annotations
+import asyncio
 import math
 import time
 import httpx
@@ -89,16 +90,45 @@ async def fetch_universe(filters: dict = None) -> list[str]:
     return _FALLBACK_UNIVERSE
 
 
+async def _fetch_binance_futures_symbols() -> set[str]:
+    """Return the set of active USDT-M perp symbols on Binance futures (e.g. 'FLOKI/USDT')."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get("https://fapi.binance.com/fapi/v1/exchangeInfo")
+            r.raise_for_status()
+        return {
+            f"{s['baseAsset']}/USDT"
+            for s in r.json()["symbols"]
+            if s["status"] == "TRADING"
+            and s["quoteAsset"] == "USDT"
+            and s["contractType"] == "PERPETUAL"
+        }
+    except Exception as e:
+        print(f"[scanner] Could not fetch Binance futures symbols: {e}", flush=True)
+        return set()
+
+
 async def _fetch_from_binance(min_vol_usdt: float) -> list[str]:
     """
     Build universe using CoinGecko markets API — accessible from all cloud regions.
-    Returns top coins by market cap that trade on Binance with sufficient USDT volume.
-    Falls back to Binance futures/spot API if CoinGecko fails (works locally).
+    Cross-filters against Binance USDT-M perp contracts so only tradeable
+    futures pairs are included (important for live trading).
+    Falls back to Binance futures API directly if CoinGecko fails.
     """
+    # Fetch Binance futures contract list in parallel with CoinGecko
+    futures_symbols_task = asyncio.create_task(_fetch_binance_futures_symbols())
+
     try:
-        return await _fetch_coingecko_universe(min_vol_usdt)
+        pairs = await _fetch_coingecko_universe(min_vol_usdt)
+        futures_symbols = await futures_symbols_task
+        if futures_symbols:
+            before = len(pairs)
+            pairs = [p for p in pairs if p in futures_symbols]
+            print(f"[scanner] Futures filter: {before} → {len(pairs)} pairs (perps only)", flush=True)
+        return pairs
     except Exception as e:
         print(f"[scanner] CoinGecko universe failed ({e}), trying Binance futures", flush=True)
+        await futures_symbols_task  # cancel cleanly
 
     try:
         return await _fetch_binance_futures_universe(min_vol_usdt)
