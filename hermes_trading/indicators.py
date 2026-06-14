@@ -835,35 +835,45 @@ def chart_patterns(candles: list[dict], lookback: int = 50, swing_window: int = 
     detected: list[dict] = []
 
     # ── Double Top ─────────────────────────────────────────────────────────
-    # Two peaks at similar level, valley between them, price near/below neckline
+    # Entry: break below neckline (valley).  TP: neckline − pattern height.
     if len(swing_h) >= 2:
         (h1_i, h1), (h2_i, h2) = swing_h[-2], swing_h[-1]
         if h2_i > h1_i and abs(h1 - h2) / max(h1, 1e-9) <= tol:
             valley   = min(lows[h1_i: h2_i + 1]) if h1_i < h2_i else h1
             depth    = (max(h1, h2) - valley) / max(h1, 1e-9)
             if depth > 0.02:
-                conf = 0.75 if current <= valley * 1.01 else 0.40
+                conf     = 0.75 if current <= valley * 1.01 else 0.40
+                avg_peak = (h1 + h2) / 2
+                tp       = valley - (avg_peak - valley)   # measured move downward
                 detected.append({
                     "name": "double_top", "bias": "bearish",
-                    "key_level": round(valley, 8), "confidence": conf,
-                    "description": f"Double top peaks≈{(h1+h2)/2:.4g} neckline={valley:.4g}",
+                    "key_level": round(valley, 8),          # entry: break below neckline
+                    "tp_level":  round(tp, 8),              # TP: neckline − height
+                    "confidence": conf,
+                    "description": f"Double top peaks≈{avg_peak:.4g} neck={valley:.4g} TP={tp:.4g}",
                 })
 
     # ── Double Bottom ───────────────────────────────────────────────────────
+    # Entry: break above neckline (peak).  TP: neckline + pattern height.
     if len(swing_l) >= 2:
         (l1_i, l1), (l2_i, l2) = swing_l[-2], swing_l[-1]
         if l2_i > l1_i and abs(l1 - l2) / max(l1, 1e-9) <= tol:
-            peak     = max(highs[l1_i: l2_i + 1]) if l1_i < l2_i else l1
-            depth    = (peak - min(l1, l2)) / max(peak, 1e-9)
+            peak       = max(highs[l1_i: l2_i + 1]) if l1_i < l2_i else l1
+            avg_trough = (l1 + l2) / 2
+            depth      = (peak - avg_trough) / max(peak, 1e-9)
             if depth > 0.02:
                 conf = 0.75 if current >= peak * 0.99 else 0.40
+                tp   = peak + (peak - avg_trough)          # measured move upward
                 detected.append({
                     "name": "double_bottom", "bias": "bullish",
-                    "key_level": round(peak, 8), "confidence": conf,
-                    "description": f"Double bottom troughs≈{(l1+l2)/2:.4g} neckline={peak:.4g}",
+                    "key_level": round(peak, 8),            # entry: break above neckline
+                    "tp_level":  round(tp, 8),              # TP: neckline + height
+                    "confidence": conf,
+                    "description": f"Double bottom troughs≈{avg_trough:.4g} neck={peak:.4g} TP={tp:.4g}",
                 })
 
     # ── Triple Top ──────────────────────────────────────────────────────────
+    # Entry: break below neckline.  TP: neckline − pattern height.
     if len(swing_h) >= 3:
         (h1_i, h1), (h2_i, h2), (h3_i, h3) = swing_h[-3], swing_h[-2], swing_h[-1]
         if h1_i < h2_i < h3_i:
@@ -871,13 +881,17 @@ def chart_patterns(candles: list[dict], lookback: int = 50, swing_window: int = 
             if all(abs(h - avg_peak) / max(avg_peak, 1e-9) <= tol for h in (h1, h2, h3)):
                 valley = min(lows[h1_i: h3_i + 1])
                 conf   = 0.80 if current <= valley * 1.01 else 0.45
+                tp     = valley - (avg_peak - valley)
                 detected.append({
                     "name": "triple_top", "bias": "bearish",
-                    "key_level": round(valley, 8), "confidence": conf,
-                    "description": f"Triple top peaks≈{avg_peak:.4g} neckline={valley:.4g}",
+                    "key_level": round(valley, 8),
+                    "tp_level":  round(tp, 8),
+                    "confidence": conf,
+                    "description": f"Triple top peaks≈{avg_peak:.4g} neck={valley:.4g} TP={tp:.4g}",
                 })
 
     # ── Triple Bottom ────────────────────────────────────────────────────────
+    # Entry: break above neckline.  TP: neckline + pattern height.
     if len(swing_l) >= 3:
         (l1_i, l1), (l2_i, l2), (l3_i, l3) = swing_l[-3], swing_l[-2], swing_l[-1]
         if l1_i < l2_i < l3_i:
@@ -885,13 +899,17 @@ def chart_patterns(candles: list[dict], lookback: int = 50, swing_window: int = 
             if all(abs(l - avg_trough) / max(avg_trough, 1e-9) <= tol for l in (l1, l2, l3)):
                 peak = max(highs[l1_i: l3_i + 1])
                 conf = 0.80 if current >= peak * 0.99 else 0.45
+                tp   = peak + (peak - avg_trough)
                 detected.append({
                     "name": "triple_bottom", "bias": "bullish",
-                    "key_level": round(peak, 8), "confidence": conf,
-                    "description": f"Triple bottom troughs≈{avg_trough:.4g} neckline={peak:.4g}",
+                    "key_level": round(peak, 8),
+                    "tp_level":  round(tp, 8),
+                    "confidence": conf,
+                    "description": f"Triple bottom troughs≈{avg_trough:.4g} neck={peak:.4g} TP={tp:.4g}",
                 })
 
     # ── Head and Shoulders ──────────────────────────────────────────────────
+    # Entry: break below neckline.  TP: neckline − (head − neckline).
     if len(swing_h) >= 3:
         (ls_i, ls), (hd_i, hd), (rs_i, rs) = swing_h[-3], swing_h[-2], swing_h[-1]
         if ls_i < hd_i < rs_i and hd > ls and hd > rs:
@@ -899,14 +917,18 @@ def chart_patterns(candles: list[dict], lookback: int = 50, swing_window: int = 
                 lt = min(lows[ls_i: hd_i + 1]) if ls_i < hd_i else ls
                 rt = min(lows[hd_i: rs_i + 1]) if hd_i < rs_i else rs
                 neckline = (lt + rt) / 2
-                conf = 0.75 if current <= neckline * 1.01 else 0.45
+                conf     = 0.75 if current <= neckline * 1.01 else 0.45
+                tp       = neckline - (hd - neckline)     # head-to-neck distance projected down
                 detected.append({
                     "name": "head_shoulders", "bias": "bearish",
-                    "key_level": round(neckline, 8), "confidence": conf,
-                    "description": f"H&S head={hd:.4g} shoulders={ls:.4g}/{rs:.4g} neck={neckline:.4g}",
+                    "key_level": round(neckline, 8),
+                    "tp_level":  round(tp, 8),
+                    "confidence": conf,
+                    "description": f"H&S head={hd:.4g} neck={neckline:.4g} TP={tp:.4g}",
                 })
 
     # ── Inverse Head and Shoulders ──────────────────────────────────────────
+    # Entry: break above neckline.  TP: neckline + (neckline − head).
     if len(swing_l) >= 3:
         (ls_i, ls), (hd_i, hd), (rs_i, rs) = swing_l[-3], swing_l[-2], swing_l[-1]
         if ls_i < hd_i < rs_i and hd < ls and hd < rs:
@@ -914,46 +936,60 @@ def chart_patterns(candles: list[dict], lookback: int = 50, swing_window: int = 
                 lp = max(highs[ls_i: hd_i + 1]) if ls_i < hd_i else ls
                 rp = max(highs[hd_i: rs_i + 1]) if hd_i < rs_i else rs
                 neckline = (lp + rp) / 2
-                conf = 0.75 if current >= neckline * 0.99 else 0.45
+                conf     = 0.75 if current >= neckline * 0.99 else 0.45
+                tp       = neckline + (neckline - hd)     # head-to-neck distance projected up
                 detected.append({
                     "name": "inv_head_shoulders", "bias": "bullish",
-                    "key_level": round(neckline, 8), "confidence": conf,
-                    "description": f"Inv H&S head={hd:.4g} shoulders={ls:.4g}/{rs:.4g} neck={neckline:.4g}",
+                    "key_level": round(neckline, 8),
+                    "tp_level":  round(tp, 8),
+                    "confidence": conf,
+                    "description": f"Inv H&S head={hd:.4g} neck={neckline:.4g} TP={tp:.4g}",
                 })
 
     # ── Triangles ─────────────────────────────────────────────────────────
     if len(swing_h) >= 3 and len(swing_l) >= 3:
-        slope_h = _linreg_slope([v for _, v in swing_h[-3:]])
-        slope_l = _linreg_slope([v for _, v in swing_l[-3:]])
-        res     = sum(v for _, v in swing_h[-3:]) / 3
-        sup     = sum(v for _, v in swing_l[-3:]) / 3
-        apex    = (res + sup) / 2
+        slope_h   = _linreg_slope([v for _, v in swing_h[-3:]])
+        slope_l   = _linreg_slope([v for _, v in swing_l[-3:]])
+        res       = sum(v for _, v in swing_h[-3:]) / 3
+        sup       = sum(v for _, v in swing_l[-3:]) / 3
+        tri_h     = res - sup   # triangle height = measured move distance
+        apex      = (res + sup) / 2
 
-        # Ascending: flat top + rising bottom → bullish breakout
+        # Ascending: flat top + rising bottom → bullish breakout above resistance
+        # TP: resistance + triangle height
         if abs(slope_h) < 0.005 and slope_l > 0.005:
             conf = min(0.80, 0.50 + slope_l * 8)
             detected.append({
                 "name": "ascending_triangle", "bias": "bullish",
-                "key_level": round(res, 8), "confidence": conf,
-                "description": f"Ascending triangle resistance={res:.4g} (breakout target)",
+                "key_level": round(res, 8),                 # entry: break above resistance
+                "tp_level":  round(res + tri_h, 8),         # TP: resistance + height
+                "confidence": conf,
+                "description": f"Ascending triangle res={res:.4g} TP={res+tri_h:.4g}",
             })
-        # Descending: flat bottom + falling top → bearish breakdown
+        # Descending: flat bottom + falling top → bearish breakdown below support
+        # TP: support − triangle height
         elif abs(slope_l) < 0.005 and slope_h < -0.005:
             conf = min(0.80, 0.50 + abs(slope_h) * 8)
             detected.append({
                 "name": "descending_triangle", "bias": "bearish",
-                "key_level": round(sup, 8), "confidence": conf,
-                "description": f"Descending triangle support={sup:.4g} (breakdown target)",
+                "key_level": round(sup, 8),                 # entry: break below support
+                "tp_level":  round(sup - tri_h, 8),         # TP: support − height
+                "confidence": conf,
+                "description": f"Descending triangle sup={sup:.4g} TP={sup-tri_h:.4g}",
             })
-        # Symmetric: converging → neutral, watch breakout direction
+        # Symmetric: converging → neutral
         elif slope_h < -0.003 and slope_l > 0.003:
             detected.append({
                 "name": "symmetric_triangle", "bias": "neutral",
-                "key_level": round(apex, 8), "confidence": 0.50,
+                "key_level": round(apex, 8),
+                "tp_level":  None,
+                "confidence": 0.50,
                 "description": f"Symmetric triangle apex≈{apex:.4g} — watch breakout direction",
             })
 
     # ── Channels ──────────────────────────────────────────────────────────
+    # Ascending channel: entry at channel bottom, TP at channel top
+    # Descending channel: entry at channel top, TP at channel bottom
     if len(swing_h) >= 2 and len(swing_l) >= 2:
         slope_h  = _linreg_slope([v for _, v in swing_h[-2:]])
         slope_l  = _linreg_slope([v for _, v in swing_l[-2:]])
@@ -965,18 +1001,22 @@ def chart_patterns(candles: list[dict], lookback: int = 50, swing_window: int = 
             if slope_h > 0.003 and slope_l > 0.003:
                 detected.append({
                     "name": "ascending_channel", "bias": "bullish",
-                    "key_level": round(ch_bot, 8), "confidence": 0.55,
-                    "description": f"Ascending channel top={ch_top:.4g} bot={ch_bot:.4g} — long at bot",
+                    "key_level": round(ch_bot, 8),          # entry: long at channel bottom
+                    "tp_level":  round(ch_top, 8),          # TP: channel top
+                    "confidence": 0.55,
+                    "description": f"Ascending channel entry={ch_bot:.4g} TP={ch_top:.4g}",
                 })
             elif slope_h < -0.003 and slope_l < -0.003:
                 detected.append({
                     "name": "descending_channel", "bias": "bearish",
-                    "key_level": round(ch_top, 8), "confidence": 0.55,
-                    "description": f"Descending channel top={ch_top:.4g} bot={ch_bot:.4g} — short at top",
+                    "key_level": round(ch_top, 8),          # entry: short at channel top
+                    "tp_level":  round(ch_bot, 8),          # TP: channel bottom
+                    "confidence": 0.55,
+                    "description": f"Descending channel entry={ch_top:.4g} TP={ch_bot:.4g}",
                 })
 
     # ── Bull Flag ──────────────────────────────────────────────────────────
-    # Strong upward pole in first half, tight pullback consolidation in second half
+    # Entry: breakout above flag high.  TP: flag high + flagpole length.
     n = len(data)
     if n >= 20:
         mid        = n // 2
@@ -991,47 +1031,57 @@ def chart_patterns(candles: list[dict], lookback: int = 50, swing_window: int = 
                 and flag_slope < 0
                 and pole_range > 0
                 and flag_range < pole_range * 0.50):
-            conf = min(0.80, 0.50 + pole_move)
+            conf      = min(0.80, 0.50 + pole_move)
+            flag_high = max(closes[-5:])
+            tp        = flag_high + pole_range              # flagpole extension
             detected.append({
                 "name": "bull_flag", "bias": "bullish",
-                "key_level": round(max(closes[-5:]), 8), "confidence": conf,
-                "description": f"Bull flag pole={pole_move:.1%} — breakout above flag",
+                "key_level": round(flag_high, 8),           # entry: breakout above flag
+                "tp_level":  round(tp, 8),                  # TP: flag high + pole length
+                "confidence": conf,
+                "description": f"Bull flag pole={pole_move:.1%} entry={flag_high:.4g} TP={tp:.4g}",
             })
         # Bear Flag
+        # Entry: breakdown below flag low.  TP: flag low − flagpole length.
         elif (pole_move < -0.05
                 and flag_slope > 0
                 and pole_range > 0
                 and flag_range < pole_range * 0.50):
-            conf = min(0.80, 0.50 + abs(pole_move))
+            conf     = min(0.80, 0.50 + abs(pole_move))
+            flag_low = min(closes[-5:])
+            tp       = flag_low - pole_range                # flagpole extension downward
             detected.append({
                 "name": "bear_flag", "bias": "bearish",
-                "key_level": round(min(closes[-5:]), 8), "confidence": conf,
-                "description": f"Bear flag pole={pole_move:.1%} — breakdown below flag",
+                "key_level": round(flag_low, 8),            # entry: breakdown below flag
+                "tp_level":  round(tp, 8),                  # TP: flag low − pole length
+                "confidence": conf,
+                "description": f"Bear flag pole={pole_move:.1%} entry={flag_low:.4g} TP={tp:.4g}",
             })
 
     # ── Cup and Handle ──────────────────────────────────────────────────────
-    # U-shaped base (rounded bottom) + small handle pullback → bullish breakout
+    # Entry: breakout above rim.  TP: rim + cup depth.
     if n >= 30:
         cup      = closes[:int(n * 0.75)]
         handle   = closes[int(n * 0.75):]
         cup_top  = max(cup[0], cup[-1])
         cup_bot  = min(cup)
-        cup_mid  = len(cup) // 2
-        cup_depth = (cup_top - cup_bot) / max(cup_top, 1e-9)
-        # Cup: price recovers back toward the rim
+        cup_depth_abs = cup_top - cup_bot
+        cup_depth = cup_depth_abs / max(cup_top, 1e-9)
         cup_recovery = (cup[-1] - cup_bot) / max(cup_top - cup_bot, 1e-9)
-        # Handle: small pullback (< 50% of cup depth)
         handle_pullback = (max(handle) - min(handle)) / max(cup_top, 1e-9)
         if (cup_depth > 0.10
                 and cup_recovery > 0.70
                 and handle_pullback < cup_depth * 0.50
-                and _linreg_slope(handle) < 0):   # handle drifts slightly down
-            rim = cup_top
+                and _linreg_slope(handle) < 0):
+            rim  = cup_top
+            tp   = rim + cup_depth_abs                      # rim + cup height
             conf = min(0.75, 0.50 + cup_depth)
             detected.append({
                 "name": "cup_and_handle", "bias": "bullish",
-                "key_level": round(rim, 8), "confidence": conf,
-                "description": f"Cup & handle rim={rim:.4g} depth={cup_depth:.1%} — breakout above rim",
+                "key_level": round(rim, 8),                 # entry: breakout above rim
+                "tp_level":  round(tp, 8),                  # TP: rim + cup depth
+                "confidence": conf,
+                "description": f"Cup & handle rim={rim:.4g} depth={cup_depth:.1%} TP={tp:.4g}",
             })
 
     # ── Summarise ──────────────────────────────────────────────────────────
@@ -1184,22 +1234,21 @@ def dynamic_levels(
     for _pat_src in (patterns_1h, patterns_4h):
         if not _pat_src:
             continue
-        # For longs: use best bullish pattern key_level above entry
-        # For shorts: use best bearish pattern key_level below entry
+        # Use tp_level (measured move target), not key_level (entry trigger)
         _best = _pat_src.get("best_bullish") if is_long else _pat_src.get("best_bearish")
         if _best and isinstance(_best, dict):
-            _kl = _best.get("key_level")
-            if _kl:
-                if is_long and _kl > entry_price:
-                    _dist = _kl - entry_price
+            _tl = _best.get("tp_level")
+            if _tl:
+                if is_long and _tl > entry_price:
+                    _dist = _tl - entry_price
                     if _dist / sl_dist >= min_rr:
-                        _pat_tp_price  = _kl
+                        _pat_tp_price  = _tl
                         _pat_tp_method = f"pattern_{_best['name']}"
                         break
-                elif not is_long and _kl < entry_price:
-                    _dist = entry_price - _kl
+                elif not is_long and _tl < entry_price:
+                    _dist = entry_price - _tl
                     if _dist / sl_dist >= min_rr:
-                        _pat_tp_price  = _kl
+                        _pat_tp_price  = _tl
                         _pat_tp_method = f"pattern_{_best['name']}"
                         break
 
