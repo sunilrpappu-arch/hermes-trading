@@ -445,6 +445,7 @@ _HTML = r"""<!DOCTYPE html>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Hermes Trading Dashboard</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>"/>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
@@ -1488,6 +1489,13 @@ function renderSentiment(sentiment, data) {
       ? `RSI ${c.rsi_score.toFixed(0)}/30 · MA ${c.ma_score.toFixed(0)}/25 · VWAP ${c.vwap_score.toFixed(0)}/20 · Vol ${(c.vol_score||0).toFixed(0)}/15 · Mom ${(c.mom_score||0).toFixed(0)}/10`
       : '—';
 
+    const verdict = totalScore == null ? { label: '—', color: '#64748b' }
+      : totalScore <= 18  ? { label: 'BEARISH',  color: '#ef4444' }
+      : totalScore >= 85  ? { label: 'OVERBOUGHT', color: '#f59e0b' }
+      : totalScore >= 65  ? { label: 'BULLISH',  color: '#34d399' }
+      : totalScore <= 35  ? { label: 'BEARISH',  color: '#f87171' }
+      : { label: 'SIDEWAYS', color: '#818cf8' };
+
     // Insert MACD card after Price Momentum (5th card = index 4), before Total3/Total2
     const macroCardsList = macroItems.filter(Boolean).map(m => `
       <div class="bg-slate-900 rounded-lg px-3 py-2 cursor-default" title="${m.tip}"
@@ -1500,7 +1508,10 @@ function renderSentiment(sentiment, data) {
     macroCardsList.splice(5, 0, macdCardHtml);
     macroEl.innerHTML = macroCardsList.join('') + `
     <div class="col-span-2 bg-slate-900 rounded-lg px-3 py-2 border border-slate-700">
-      <p class="text-slate-500 text-xs mb-1">SCORE BREAKDOWN — what each signal contributed</p>
+      <div class="flex items-center justify-between mb-1">
+        <p class="text-slate-500 text-xs">SCORE BREAKDOWN — what each signal contributed</p>
+        <span class="font-bold text-sm px-2 py-0.5 rounded" style="color:${verdict.color};background:${verdict.color}22;border:1px solid ${verdict.color}44">${verdict.label}</span>
+      </div>
       <p class="font-mono text-xs text-slate-300 mb-1">${breakdown}</p>
       <div class="flex items-center justify-between">
         <span class="text-slate-500 text-xs">${scoreTrigger}</span>
