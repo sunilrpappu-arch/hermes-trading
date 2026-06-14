@@ -1007,6 +1007,40 @@ function renderPairs(heartbeats) {
     }
 
     // ── COMPACT card for flat pairs ──
+    // Build "waiting for…" hint from available signals
+    const waitingFor = (() => {
+      const needs = [];
+      const rsiVal = hb.rsi_15m;
+      const rngVal = hb.rng_pos;
+      const regime = hb.pair_regime || hb.regime || '';
+      const SW_PCT  = 0.20;
+      if (hb.in_cooldown) return 'cooldown after stop-loss';
+      if (rngVal != null && rsiVal != null && rngVal <= SW_PCT) {
+        // Near range low — waiting for oversold RSI
+        if (rsiVal >= 30) needs.push(`RSI<30 (${rsiVal.toFixed(1)})`);
+        if (hb.bo_breakdown) needs.push('breakdown clearing');
+        if (needs.length === 0) needs.push('bull candle');
+      } else if (rngVal != null && rsiVal != null && rngVal >= (1 - SW_PCT)) {
+        // Near range high — waiting for overbought RSI
+        if (rsiVal <= 70) needs.push(`RSI>70 (${rsiVal.toFixed(1)})`);
+        if (hb.bo_breakout) needs.push('breakout clearing');
+        if (needs.length === 0) needs.push('bear candle');
+      } else if (regime === 'bull') {
+        if (hb.bo_breakout) needs.push('breakout · bull candle');
+        else if (rsiVal != null && rsiVal >= 35) needs.push(`RSI dip<35 (${rsiVal.toFixed(1)})`);
+        else needs.push('bull candle confirm');
+      } else if (regime === 'bear') {
+        if (rsiVal != null && rsiVal <= 65) needs.push(`RSI>65 (${rsiVal.toFixed(1)})`);
+        else needs.push('bear candle confirm');
+      } else if (rngVal != null) {
+        needs.push(`range extreme (rng ${Math.round(rngVal*100)}%)`);
+      }
+      return needs.length ? needs.join(' · ') : null;
+    })();
+    const waitingLine = waitingFor
+      ? `<div style="color:#94a3b8;font-size:10px;margin-top:2px">⏳ ${waitingFor}</div>`
+      : '';
+
     return `
     <div class="flex items-center justify-between bg-slate-900 rounded-lg px-3 py-2 cursor-pointer hover:bg-slate-800 transition-colors"
          onclick="loadChart('${asset}')" title="${newsHeadlines.length ? '📰 ' + newsHeadlines.join(' | ') : 'Click to load chart'}">
@@ -1014,6 +1048,7 @@ function renderPairs(heartbeats) {
         <span class="font-semibold text-sm text-white">${asset.replace('/USDT','')}/USDT</span>
         ${newsBadge}
         <span class="${posClass} text-xs font-bold ml-1">${posLabel}</span>
+        ${waitingLine}
       </div>
       <div class="text-right text-xs text-slate-400">
         <div>$${parseFloat(hb.price || 0).toFixed(4)}</div>
