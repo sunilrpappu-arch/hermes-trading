@@ -1490,10 +1490,12 @@ function renderSentiment(sentiment, data) {
       : '—';
 
     const verdict = totalScore == null ? { label: '—', color: '#64748b' }
-      : totalScore <= 18  ? { label: 'BEARISH',  color: '#ef4444' }
+      : totalScore <= 10  ? { label: 'OVERSOLD',   color: '#ef4444' }
+      : totalScore <= 18  ? { label: 'BEARISH',    color: '#f87171' }
+      : totalScore >= 93  ? { label: 'OVERBOUGHT', color: '#ef4444' }
       : totalScore >= 85  ? { label: 'OVERBOUGHT', color: '#f59e0b' }
-      : totalScore >= 65  ? { label: 'BULLISH',  color: '#34d399' }
-      : totalScore <= 35  ? { label: 'BEARISH',  color: '#f87171' }
+      : totalScore >= 65  ? { label: 'BULLISH',    color: '#34d399' }
+      : totalScore <= 35  ? { label: 'BEARISH',    color: '#f87171' }
       : { label: 'SIDEWAYS', color: '#818cf8' };
 
     // Insert MACD card after Price Momentum (5th card = index 4), before Total3/Total2
