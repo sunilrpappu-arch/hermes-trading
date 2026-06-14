@@ -298,16 +298,24 @@ async def run_all(universe: list[str], total_capital: float, force_pairs: list[s
             except Exception:
                 pass
 
+        _rescan_task: asyncio.Task | None = None
+
         while True:
             now = asyncio.get_event_loop().time()
 
-            # Rescan on first run and every SCAN_INTERVAL
-            if now - last_scan >= SCAN_INTERVAL:
-                try:
-                    await rescan()
-                    last_scan = now
-                except Exception as e:
-                    print(f"[coordinator] rescan failed: {e}", flush=True)
+            # Rescan on first run and every SCAN_INTERVAL — run as background task
+            # so market-data ticks keep flowing while the universe scan runs.
+            rescan_due = now - last_scan >= SCAN_INTERVAL
+            rescan_idle = _rescan_task is None or _rescan_task.done()
+            if rescan_due and rescan_idle:
+                if _rescan_task is not None and _rescan_task.done():
+                    try:
+                        _rescan_task.result()   # surface any exception to logs
+                    except Exception as e:
+                        print(f"[coordinator] rescan failed: {e}", flush=True)
+                last_scan = now
+                _rescan_task = asyncio.create_task(rescan())
+                print("[coordinator] rescan started in background", flush=True)
 
             if active_pairs:
                 try:
