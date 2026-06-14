@@ -1896,11 +1896,18 @@ setInterval(refreshLivePrices, 5000);
 let _currentTvSymbol = 'BINANCE:BTCUSDTPERP';
 let _tvWidget = null;
 
+// Pairs that only exist as spot on Binance (no perpetual contract)
+const SPOT_ONLY_PAIRS = new Set([
+  'FLOKI','SHIB','PEPE','BONK','MEME','LUNC','HOT','WIN','REEF',
+  'KITE','ANKR','STMX','TROY','DUSK','COCOS','PHB','BURGER',
+]);
+
 function tvSymbol(asset) {
   // Handle special index symbols (no exchange prefix, no PERP suffix)
   const indexSymbols = ['TOTAL', 'TOTAL2', 'TOTAL3', 'BTC.D', 'OTHERS.D'];
   const clean = (asset || 'BTC/USDT').replace('/USDT', '').replace('USDT', '');
   if (indexSymbols.includes(clean)) return clean;
+  if (SPOT_ONLY_PAIRS.has(clean)) return `BINANCE:${clean}USDT`;
   return `BINANCE:${clean}USDTPERP`;
 }
 
@@ -1950,6 +1957,14 @@ function loadChart(asset) {
       'RSI@tv-basicstudies',
       'MACD@tv-basicstudies',
     ],
+    symbol_error: function() {
+      // Perp doesn't exist — fall back to spot
+      if (sym.endsWith('USDTPERP')) {
+        const spotSym = sym.replace('USDTPERP', 'USDT');
+        console.log(`[chart] ${sym} not found — falling back to ${spotSym}`);
+        _tvWidget && _tvWidget.setSymbol && _tvWidget.setSymbol(spotSym, iv, () => {});
+      }
+    },
   });
 }
 
