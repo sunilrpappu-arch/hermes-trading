@@ -1204,8 +1204,9 @@ function renderNews(heartbeats) {
     const sym       = asset.replace('/USDT', '');
     const color     = label === 'bullish' ? '#34d399' : label === 'bearish' ? '#f87171' : '#64748b';
     const icon      = label === 'bullish' ? '▲' : label === 'bearish' ? '▼' : '·';
-    const urls = hb.news_headline_urls || [];
-    headlines.forEach((h, i) => items.push({ sym, color, icon, headline: h, url: urls[i] || '', label }));
+    const urls    = hb.news_headline_urls    || [];
+    const sources = hb.news_headline_sources || [];
+    headlines.forEach((h, i) => items.push({ sym, color, icon, headline: h, url: urls[i] || '', source: sources[i] || '', label }));
   }
 
   // Sort: bullish first, then bearish, then neutral
@@ -1236,10 +1237,11 @@ function _renderNewsItems(items, activeSym) {
     const mine   = items.filter(i => i.sym === activeSym);
     const others = items.filter(i => i.sym !== activeSym);
     const makeRow = (item, dim) => {
+      const srcLabel = item.source ? ` · ${item.source}` : '';
       const headlineHtml = item.url
         ? `<a href="${item.url}" target="_blank" rel="noopener noreferrer"
               class="text-slate-300 text-xs leading-relaxed hover:text-indigo-400 hover:underline transition-colors"
-              title="Open article">${item.headline} ↗</a>`
+              title="${item.headline}${srcLabel}">${item.headline} <span class="text-slate-500 text-xs">${item.source ? '· ' + item.source : ''} ↗</span></a>`
         : `<span class="text-slate-300 text-xs leading-relaxed">${item.headline}</span>`;
       return `
       <div class="flex items-start gap-2 py-1 border-b border-slate-800 last:border-0"
@@ -1258,10 +1260,11 @@ function _renderNewsItems(items, activeSym) {
     rows = mineHtml + divider + othersHtml;
   } else {
     rows = items.map(item => {
+      const srcLabel = item.source ? ` · ${item.source}` : '';
       const headlineHtml = item.url
         ? `<a href="${item.url}" target="_blank" rel="noopener noreferrer"
               class="text-slate-300 text-xs leading-relaxed hover:text-indigo-400 hover:underline transition-colors"
-              title="Open article">${item.headline} ↗</a>`
+              title="${item.headline}${srcLabel}">${item.headline} <span class="text-slate-500 text-xs">${item.source ? '· ' + item.source : ''} ↗</span></a>`
         : `<span class="text-slate-300 text-xs leading-relaxed">${item.headline}</span>`;
       return `
       <div class="flex items-start gap-2 py-1 border-b border-slate-800 last:border-0">

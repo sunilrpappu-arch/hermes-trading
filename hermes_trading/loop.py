@@ -1394,8 +1394,9 @@ class TradingLoop:
             "news_label":         pair_news.get("label",            "no_data"),
             "news_sentiment":     pair_news.get("sentiment",        0.0),
             "news_posts":         pair_news.get("post_count",       0),
-            "news_headlines":     pair_news.get("headlines",        []),
-            "news_headline_urls": pair_news.get("headline_urls",    []),
+            "news_headlines":        pair_news.get("headlines",        []),
+            "news_headline_urls":    pair_news.get("headline_urls",    []),
+            "news_headline_sources": pair_news.get("headline_sources", []),
             # Session breakout
             "session_name":       active_session["name"]              if active_session else None,
             "session_emoji":      active_session["emoji"]             if active_session else None,

@@ -32,10 +32,10 @@ from datetime import datetime, timezone, timedelta
 # ---------------------------------------------------------------------------
 
 RSS_FEEDS = [
-    "https://cointelegraph.com/rss",
-    "https://decrypt.co/feed",
-    "https://www.coindesk.com/arc/outboundfeeds/rss/",
-    "https://bitcoinmagazine.com/.rss/full/",
+    ("https://cointelegraph.com/rss",                    "CoinTelegraph"),
+    ("https://decrypt.co/feed",                          "Decrypt"),
+    ("https://www.coindesk.com/arc/outboundfeeds/rss/",  "CoinDesk"),
+    ("https://bitcoinmagazine.com/.rss/full/",           "Bitcoin Magazine"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -142,7 +142,7 @@ async def _get_feed_articles() -> list[dict]:
 
     cutoff = time.time() - 86400   # only last 24h articles matter
 
-    tasks   = [_fetch_feed(url) for url in RSS_FEEDS]
+    tasks   = [_fetch_feed(url, source) for url, source in RSS_FEEDS]
     batches = await asyncio.gather(*tasks, return_exceptions=True)
 
     articles: list[dict] = []
@@ -155,7 +155,7 @@ async def _get_feed_articles() -> list[dict]:
     return articles
 
 
-async def _fetch_feed(url: str) -> list[dict]:
+async def _fetch_feed(url: str, source: str = "") -> list[dict]:
     """Fetch and parse one RSS feed. Returns list of article dicts."""
     try:
         async with httpx.AsyncClient(timeout=10.0, follow_redirects=True,
@@ -184,7 +184,7 @@ async def _fetch_feed(url: str) -> list[dict]:
         if not link:
             link = _text(item, ["atom:link"], ns) or ""
         if title:
-            articles.append({"title": title, "summary": summary or "", "published_ts": ts, "url": link})
+            articles.append({"title": title, "summary": summary or "", "published_ts": ts, "url": link, "source": source})
     return articles
 
 
@@ -233,6 +233,7 @@ def _score_symbol(symbol: str, articles: list[dict]) -> dict:
 
     matched_headlines = []
     matched_urls      = []
+    matched_sources   = []
     scores = []
 
     for article in articles:
@@ -251,6 +252,7 @@ def _score_symbol(symbol: str, articles: list[dict]) -> dict:
         if len(matched_headlines) < 3:
             matched_headlines.append(article["title"][:100])
             matched_urls.append(article.get("url", ""))
+            matched_sources.append(article.get("source", ""))
 
     if not scores:
         return _empty()
@@ -275,6 +277,7 @@ def _score_symbol(symbol: str, articles: list[dict]) -> dict:
         "post_count":       n,
         "headlines":        matched_headlines,
         "headline_urls":    matched_urls,
+        "headline_sources": matched_sources,
         "conviction_bonus": bonus,
         "label":            label,
     }
