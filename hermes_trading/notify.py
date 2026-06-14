@@ -86,7 +86,7 @@ def send_entry_notification(trade: dict):
     tp_method = trade.get("tp_method", "?")
     mode      = trade.get("mode", "paper")
     lev       = trade.get("leverage", 1)
-    score     = trade.get("conviction_score", None)
+    rsi       = trade.get("rsi_at_entry", None)
     mtf       = trade.get("mtf_signals", [])
     mtf_str   = " · ".join(mtf[:3]) if mtf else "—"
 
@@ -99,8 +99,8 @@ def send_entry_notification(trade: dict):
         f"<b>TP:</b> ${tp:.6f}  ({tp_method})\n"
         f"<b>R:R:</b> {rr:.2f}x\n"
     )
-    if score is not None:
-        msg += f"<b>Score:</b> {score:.0f}/100\n"
+    if rsi is not None:
+        msg += f"<b>RSI:</b> {rsi:.1f}\n"
     if mtf_str != "—":
         msg += f"<b>MTF:</b> {mtf_str}\n"
     _send_telegram(msg)

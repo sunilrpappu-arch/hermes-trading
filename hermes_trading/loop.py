@@ -1336,7 +1336,7 @@ class TradingLoop:
                 self._save_position()
                 send_entry_notification({
                     **self.open_position,
-                    "conviction_score": conviction,
+                    "conviction_score": self.open_position.get("conviction_score"),
                     "mtf_signals":      htf_reasons,
                 })
                 signals_str = ", ".join(htf_reasons + ([lq_note] if lq_note else []))
