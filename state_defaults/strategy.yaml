@@ -1,3 +1,6 @@
+# v24 — Pattern block bypass: RSI <25 or >75 overrides bearish/bullish pattern gate
+#        Sideways MTF dropped to 0: range entries self-confirming, no MACD required
+#        Pattern key_level as priority TP: neckline/breakout target used before swing levels
 # v23 — News RSS sentiment layer: CoinTelegraph/Decrypt/CoinDesk feeds, direction-aware
 #        MTF adjustment (headwind +1, tailwind -1, bypassed when market has priced news)
 #        Active feature manifest: every change tagged + embedded in trade records
@@ -83,4 +86,4 @@ session_breakout:
   min_fg_score:         18     # blocked if fear/greed below this (extreme fear)
   max_fg_score:         85     # blocked if fear/greed above this (extreme greed)
 
-version: '23'
+version: '24'
