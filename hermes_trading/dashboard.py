@@ -1007,38 +1007,59 @@ function renderPairs(heartbeats) {
     }
 
     // ── COMPACT card for flat pairs ──
-    // Build "waiting for…" hint from available signals
-    const waitingFor = (() => {
-      const needs = [];
+    // Build "watching for…" hint: direction + what's needed + active patterns
+    const watchHint = (() => {
       const rsiVal = hb.rsi_15m;
       const rngVal = hb.rng_pos;
       const regime = hb.pair_regime || hb.regime || '';
       const SW_PCT  = 0.20;
-      if (hb.in_cooldown) return 'cooldown after stop-loss';
+      const bullPat = (hb.patterns_bull || []).slice(0, 2).join(', ');
+      const bearPat = (hb.patterns_bear || []).slice(0, 2).join(', ');
+      const csBull  = (hb.cs_bullish || []).join(', ');
+      const csBear  = (hb.cs_bearish || []).join(', ');
+      const patHint = (p) => p ? ` · ${p}` : '';
+
+      if (hb.in_cooldown) return { dir: null, color: '#64748b', msg: 'cooldown after stop-loss' };
+
+      // Range extreme long setup
       if (rngVal != null && rsiVal != null && rngVal <= SW_PCT) {
-        // Near range low — waiting for oversold RSI
-        if (rsiVal >= 30) needs.push(`RSI<30 (${rsiVal.toFixed(1)})`);
-        if (hb.bo_breakdown) needs.push('breakdown clearing');
-        if (needs.length === 0) needs.push('bull candle');
-      } else if (rngVal != null && rsiVal != null && rngVal >= (1 - SW_PCT)) {
-        // Near range high — waiting for overbought RSI
-        if (rsiVal <= 70) needs.push(`RSI>70 (${rsiVal.toFixed(1)})`);
-        if (hb.bo_breakout) needs.push('breakout clearing');
-        if (needs.length === 0) needs.push('bear candle');
-      } else if (regime === 'bull') {
-        if (hb.bo_breakout) needs.push('breakout · bull candle');
-        else if (rsiVal != null && rsiVal >= 35) needs.push(`RSI dip<35 (${rsiVal.toFixed(1)})`);
-        else needs.push('bull candle confirm');
-      } else if (regime === 'bear') {
-        if (rsiVal != null && rsiVal <= 65) needs.push(`RSI>65 (${rsiVal.toFixed(1)})`);
-        else needs.push('bear candle confirm');
-      } else if (rngVal != null) {
-        needs.push(`range extreme (rng ${Math.round(rngVal*100)}%)`);
+        const missing = rsiVal >= 30 ? `RSI<30 (${rsiVal.toFixed(1)})` : hb.bo_breakdown ? 'breakdown clearing' : null;
+        const pat = patHint(bullPat || csBull);
+        return { dir: '↑ LONG', color: '#34d399', msg: missing ? `needs ${missing}${pat}` : `candle confirm${pat}` };
       }
-      return needs.length ? needs.join(' · ') : null;
+      // Range extreme short setup
+      if (rngVal != null && rsiVal != null && rngVal >= (1 - SW_PCT)) {
+        const missing = rsiVal <= 70 ? `RSI>70 (${rsiVal.toFixed(1)})` : hb.bo_breakout ? 'breakout clearing' : null;
+        const pat = patHint(bearPat || csBear);
+        return { dir: '↓ SHORT', color: '#f87171', msg: missing ? `needs ${missing}${pat}` : `candle confirm${pat}` };
+      }
+      // Bull regime
+      if (regime === 'bull') {
+        const pat = patHint(bullPat || csBull);
+        if (hb.bo_breakout) return { dir: '↑ LONG', color: '#34d399', msg: `breakout · needs bull candle${pat}` };
+        if (rsiVal != null && rsiVal >= 35) return { dir: '↑ LONG', color: '#34d399', msg: `needs RSI dip<35 (${rsiVal.toFixed(1)})${pat}` };
+        return { dir: '↑ LONG', color: '#34d399', msg: `needs bull candle${pat}` };
+      }
+      // Bear regime
+      if (regime === 'bear') {
+        const pat = patHint(bearPat || csBear);
+        if (rsiVal != null && rsiVal <= 65) return { dir: '↓ SHORT', color: '#f87171', msg: `needs RSI>65 (${rsiVal.toFixed(1)})${pat}` };
+        return { dir: '↓ SHORT', color: '#f87171', msg: `needs bear candle${pat}` };
+      }
+      // Sideways / no clear setup
+      if (rngVal != null) {
+        const pct = Math.round(rngVal * 100);
+        if (pct < 30) return { dir: '↑ LONG', color: '#34d399', msg: `watching range low (${pct}%)` };
+        if (pct > 70) return { dir: '↓ SHORT', color: '#f87171', msg: `watching range high (${pct}%)` };
+        return { dir: null, color: '#64748b', msg: `mid-range (${pct}%) — no setup` };
+      }
+      return null;
     })();
-    const waitingLine = waitingFor
-      ? `<div style="color:#94a3b8;font-size:10px;margin-top:2px">⏳ ${waitingFor}</div>`
+    const waitingLine = watchHint
+      ? `<div style="font-size:10px;margin-top:2px">
+           ${watchHint.dir ? `<span style="color:${watchHint.color};font-weight:600">${watchHint.dir}</span> ` : ''}
+           <span style="color:#94a3b8">⏳ ${watchHint.msg}</span>
+         </div>`
       : '';
 
     return `

@@ -142,11 +142,12 @@ async def run_all(universe: list[str], total_capital: float, force_pairs: list[s
                          "position_size_r": 0.05, "stop_loss_pct": 1.8, "take_profit_pct": 3.0}
     active_pairs: list[str] = []
 
-    # ── Fast boot: spin up loops immediately from position files + goal.yaml
+    # ── Fast boot: spin up loops immediately from position files + last scan
     # so pairs start ticking before the first (slow) rescan completes.
     def _boot_pairs() -> list[str]:
         import json as _j
         boot = []
+        # 1. Always restore open positions first
         for pf in STATE_DIR.glob("position_*.json"):
             try:
                 pos = _j.loads(pf.read_text())
@@ -160,11 +161,24 @@ async def run_all(universe: list[str], total_capital: float, force_pairs: list[s
             for p in force_pairs:
                 if p not in boot:
                     boot.append(p)
-        elif not boot:
-            goal = load_goal()
-            for p in goal.get("pairs", [])[:regime_info.get("max_pairs", 5)]:
-                if p not in boot:
-                    boot.append(p)
+            return boot
+        # 2. Fill remaining slots from last scan result
+        sp_file = STATE_DIR / "selected_pairs.json"
+        if sp_file.exists():
+            try:
+                last = _j.loads(sp_file.read_text())
+                for p in last:
+                    if p not in boot:
+                        boot.append(p)
+                print(f"[boot] loaded {len(last)} pairs from last scan", flush=True)
+                return boot
+            except Exception:
+                pass
+        # 3. Fall back to goal.yaml universe
+        goal = load_goal()
+        for p in goal.get("universe", goal.get("pairs", []))[:regime_info.get("max_pairs", 5)]:
+            if p not in boot:
+                boot.append(p)
         return boot
 
     _boot = _boot_pairs()
@@ -249,6 +263,12 @@ async def run_all(universe: list[str], total_capital: float, force_pairs: list[s
 
         active_pairs = list(loops.keys())
         print(f"[coordinator] active pairs: {active_pairs} | regime: {regime_info.get('label','?')}", flush=True)
+        # Persist selected pairs so next boot can pre-seed without waiting for rescan
+        try:
+            import json as _pj
+            (STATE_DIR / "selected_pairs.json").write_text(_pj.dumps(active_pairs))
+        except Exception:
+            pass
 
     # ── alternative.me Fear & Greed (real index, 10-min cache) ─────────────
     _altme_cache: dict = {}
