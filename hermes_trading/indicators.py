@@ -1059,6 +1059,8 @@ def dynamic_levels(
     max_sl_pct: float = 0.04,   # never risk more than 4% on a single trade
     min_sl_pct: float = 0.003,  # never place SL inside 0.3% noise band
     sl_buffer_pct: float = 0.003,  # buffer just beyond the structural level
+    patterns_1h: dict = None,   # chart_patterns() result for TP via key_level
+    patterns_4h: dict = None,   # chart_patterns() result for TP via key_level
 ) -> dict:
     """
     Compute dynamic stop-loss and take-profit levels from price structure.
@@ -1070,8 +1072,9 @@ def dynamic_levels(
       2. ATR-based fallback  (entry ± 1.5 × ATR_15m)
 
     Take-profit:
-      1. Nearest structural level on the winning side that satisfies min_rr
-      2. Fibonacci extension from risk:  1.0×, 1.618×, 2.0×, 2.618×, 3.0×
+      1. Chart pattern key_level (neckline / breakout target) if pattern confirms direction
+      2. Nearest structural level on the winning side that satisfies min_rr
+      3. Fibonacci extension from risk:  1.0×, 1.618×, 2.0×, 2.618×, 3.0×
 
     Returns
     ───────
@@ -1173,26 +1176,58 @@ def dynamic_levels(
         if fib_tp > 0:
             fib_tps.append((fib_tp, label))
 
-    if is_long:
-        # Structural TPs: swing highs and range high above entry, satisfying min_rr
-        struct_tps = [p for p in all_highs if p > entry_price]
-        if rng_high and rng_high > entry_price:
-            struct_tps.append(rng_high)
-        # Nearest structural level that achieves min_rr
-        for tp in sorted(struct_tps):
-            if (tp - entry_price) / sl_dist >= min_rr:
-                tp_price  = tp
-                tp_method = "range_high" if (rng_high and abs(tp - rng_high) < entry_price * 0.001) else "swing_high"
-                break
-    else:
-        struct_tps = [p for p in all_lows if p < entry_price]
-        if rng_low and rng_low < entry_price:
-            struct_tps.append(rng_low)
-        for tp in sorted(struct_tps, reverse=True):
-            if (entry_price - tp) / sl_dist >= min_rr:
-                tp_price  = tp
-                tp_method = "range_low" if (rng_low and abs(tp - rng_low) < entry_price * 0.001) else "swing_low"
-                break
+    # ── Pattern key_level as priority TP ─────────────────────────────────
+    # Use the confirming pattern's neckline/breakout target as the first TP
+    # candidate — it's a market-derived target more meaningful than pure structure.
+    _pat_tp_price  = None
+    _pat_tp_method = None
+    for _pat_src in (patterns_1h, patterns_4h):
+        if not _pat_src:
+            continue
+        # For longs: use best bullish pattern key_level above entry
+        # For shorts: use best bearish pattern key_level below entry
+        _best = _pat_src.get("best_bullish") if is_long else _pat_src.get("best_bearish")
+        if _best and isinstance(_best, dict):
+            _kl = _best.get("key_level")
+            if _kl:
+                if is_long and _kl > entry_price:
+                    _dist = _kl - entry_price
+                    if _dist / sl_dist >= min_rr:
+                        _pat_tp_price  = _kl
+                        _pat_tp_method = f"pattern_{_best['name']}"
+                        break
+                elif not is_long and _kl < entry_price:
+                    _dist = entry_price - _kl
+                    if _dist / sl_dist >= min_rr:
+                        _pat_tp_price  = _kl
+                        _pat_tp_method = f"pattern_{_best['name']}"
+                        break
+
+    if _pat_tp_price is not None:
+        tp_price  = _pat_tp_price
+        tp_method = _pat_tp_method
+
+    if tp_price is None:
+        if is_long:
+            # Structural TPs: swing highs and range high above entry, satisfying min_rr
+            struct_tps = [p for p in all_highs if p > entry_price]
+            if rng_high and rng_high > entry_price:
+                struct_tps.append(rng_high)
+            # Nearest structural level that achieves min_rr
+            for tp in sorted(struct_tps):
+                if (tp - entry_price) / sl_dist >= min_rr:
+                    tp_price  = tp
+                    tp_method = "range_high" if (rng_high and abs(tp - rng_high) < entry_price * 0.001) else "swing_high"
+                    break
+        else:
+            struct_tps = [p for p in all_lows if p < entry_price]
+            if rng_low and rng_low < entry_price:
+                struct_tps.append(rng_low)
+            for tp in sorted(struct_tps, reverse=True):
+                if (entry_price - tp) / sl_dist >= min_rr:
+                    tp_price  = tp
+                    tp_method = "range_low" if (rng_low and abs(tp - rng_low) < entry_price * 0.001) else "swing_low"
+                    break
 
     # Fibonacci fallback: pick first fib level that satisfies min_rr
     if tp_price is None:

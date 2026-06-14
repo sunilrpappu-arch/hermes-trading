@@ -1145,6 +1145,8 @@ class TradingLoop:
                         max_sl_pct   = 0.04,     # hard cap: never risk >4%
                         min_sl_pct   = 0.003,
                         sl_buffer_pct= 0.003,
+                        patterns_1h  = patterns_1h,
+                        patterns_4h  = patterns_4h,
                     )
                     if _dyn_levels and not _dyn_levels["valid"]:
                         print(
@@ -1198,13 +1200,22 @@ class TradingLoop:
             # ------------------------------------------------------------------
             # STEP 2b: Pattern blocking — strong continuation patterns block
             # counter-trend entries (e.g. ascending triangle → no shorts)
+            # Exception: RSI extreme overrides pattern block — at RSI <25 or >75
+            # the bearish/bullish move is already exhausted; patterns are stale.
             # ------------------------------------------------------------------
-            if new_direction == "short" and pat_strong_bull:
+            rsi_extreme_long  = rsi_15m is not None and rsi_15m < 25
+            rsi_extreme_short = rsi_15m is not None and rsi_15m > 75
+            if new_direction == "short" and pat_strong_bull and not rsi_extreme_short:
                 print(f"  [PATTERN BLOCK] {self.asset} short blocked — bullish pattern active: {pat_bull_names}", flush=True)
                 new_direction = None
-            elif new_direction == "long" and pat_strong_bear:
+            elif new_direction == "long" and pat_strong_bear and not rsi_extreme_long:
                 print(f"  [PATTERN BLOCK] {self.asset} long blocked — bearish pattern active: {pat_bear_names}", flush=True)
                 new_direction = None
+            elif new_direction and (rsi_extreme_long or rsi_extreme_short):
+                if pat_strong_bear and new_direction == "long":
+                    print(f"  [PATTERN OVERRIDE] {self.asset} RSI {rsi_15m:.0f} extreme — ignoring bearish patterns {pat_bear_names}", flush=True)
+                elif pat_strong_bull and new_direction == "short":
+                    print(f"  [PATTERN OVERRIDE] {self.asset} RSI {rsi_15m:.0f} extreme — ignoring bullish patterns {pat_bull_names}", flush=True)
 
             # ------------------------------------------------------------------
             # NEWS caution layer — adjusts MTF requirement based on news sentiment
@@ -1240,9 +1251,15 @@ class TradingLoop:
 
             # ------------------------------------------------------------------
             # MTF soft gate — require ≥N HTF confirmations before entering
-            # Exceptions: manual entries and liquidity grabs bypass the gate
-            # (high-conviction price-action signals are self-confirming)
+            # Exceptions: manual entries, liquidity grabs, session breakouts,
+            # and sideways range entries (already gated by position-in-range +
+            # candle direction — adding MTF creates a catch-22 in flat markets)
             # ------------------------------------------------------------------
+            if new_direction and pair_regime == "sideways":
+                if mtf_require > 0:
+                    print(f"  [MTF SIDEWAYS] {self.asset} MTF dropped 0 (range entry self-confirming)", flush=True)
+                mtf_require = 0
+
             if new_direction and mtf_require > 0:
                 is_manual  = lq_note == "manual_entry"
                 is_lq      = lq_note and "lq_grab" in lq_note
