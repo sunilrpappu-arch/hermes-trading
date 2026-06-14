@@ -94,6 +94,14 @@ def _read_active_features() -> dict:
         return {}
 
 
+def _read_strategy_notes() -> list:
+    nf = STATE_DIR / "strategy_notes.json"
+    try:
+        return json.loads(nf.read_text()) if nf.exists() else []
+    except Exception:
+        return []
+
+
 def _read_strategy() -> dict:
     sf = STATE_DIR / "strategy.yaml"
     if not sf.exists():
@@ -215,6 +223,7 @@ async def api_state():
         "recent_trades": list(reversed(trades)),  # all trades, newest first — paginated client-side
         "sentiment":        sentiment,
         "active_features":  _read_active_features(),
+        "strategy_notes":   _read_strategy_notes(),
     })
 
 
@@ -540,6 +549,11 @@ _HTML = r"""<!DOCTYPE html>
           <div>≥ 85 → tighten stops</div>
           <div>≥ 93 → no new longs</div>
         </div>
+      </div>
+
+      <div id="strategy-notes-section" class="rounded-lg bg-slate-800 p-4 hidden">
+        <p class="text-slate-400 text-xs font-semibold uppercase mb-2">🤖 Hermes Notes <span id="strategy-notes-ts" class="text-slate-600 font-normal normal-case ml-1"></span></p>
+        <div id="strategy-notes-list" class="space-y-1"></div>
       </div>
 
       <div class="rounded-lg bg-slate-800 p-4">
@@ -1275,6 +1289,18 @@ function renderSessionBar(heartbeats) {
 
 // ── Fear/Greed + Black Swan rendering ───────────────────────────────────────
 
+function renderStrategyNotes(notes) {
+  const section = document.getElementById('strategy-notes-section');
+  const list    = document.getElementById('strategy-notes-list');
+  const tsEl    = document.getElementById('strategy-notes-ts');
+  if (!notes || !notes.length) { section.classList.add('hidden'); return; }
+  section.classList.remove('hidden');
+  tsEl.textContent = notes[0]?.ts ? '· ' + notes[0].ts : '';
+  list.innerHTML = notes.map(n =>
+    `<div class="flex gap-2"><span>${n.icon||'•'}</span><span class="text-slate-300">${n.text}</span></div>`
+  ).join('');
+}
+
 function renderSentiment(sentiment, data) {
   data = data || {};
   const fg   = sentiment.fear_greed || {};
@@ -1638,6 +1664,9 @@ async function refresh() {
 
     // Trades
     renderTrades(data.recent_trades || []);
+
+    // Hermes strategy notes
+    renderStrategyNotes(data.strategy_notes || []);
 
     // Fear/Greed + Black Swan
     renderSentiment(data.sentiment || {}, data);

@@ -133,7 +133,64 @@ async def run_downtime(
         "trades_n":     len(all_trades),
     })
 
+    # Write strategy notes for dashboard modal
+    _write_strategy_notes(diag, oos_result, rr_summary, shadow_summary)
+
     return summary
+
+
+def _write_strategy_notes(diag, oos_result, rr_summary, shadow_summary):
+    notes = []
+    ts    = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    # Idle blockers
+    all_blockers = [r for reasons in (diag or {}).values() for r in reasons]
+    if all_blockers:
+        top = all_blockers[:3]
+        notes.append({"icon": "🚫", "text": "Top blockers: " + " · ".join(top), "ts": ts})
+
+    # OOS validation
+    if oos_result:
+        train_wr = oos_result.get("train_wr", 0)
+        test_wr  = oos_result.get("test_wr",  0)
+        gap      = train_wr - test_wr
+        if gap > 15:
+            notes.append({"icon": "⚠️", "text": f"OOS gap {gap:.0f}pp (train {train_wr:.0f}% vs test {test_wr:.0f}%) — possible overfitting", "ts": ts})
+        else:
+            notes.append({"icon": "✅", "text": f"OOS healthy — train {train_wr:.0f}% vs test {test_wr:.0f}%", "ts": ts})
+
+    # R:R bleed
+    if rr_summary and rr_summary.get("pattern_vs_structural"):
+        pv = rr_summary["pattern_vs_structural"]
+        if pv["pattern_n"] >= 5:
+            if pv["pattern_wr"] < pv["structural_wr"] - 10:
+                notes.append({"icon": "⚠️", "text": f"Pattern TPs underperforming structural ({pv['pattern_wr']:.0f}% vs {pv['structural_wr']:.0f}%) — relaxed R:R may be bleeding WR", "ts": ts})
+            elif pv["pattern_wr"] > pv["structural_wr"] + 5:
+                notes.append({"icon": "✅", "text": f"Pattern TPs outperforming structural ({pv['pattern_wr']:.0f}% vs {pv['structural_wr']:.0f}%)", "ts": ts})
+
+    # Shadow trades
+    if shadow_summary and shadow_summary.get("shadow_n", 0) >= 5:
+        s_wr = shadow_summary.get("shadow_wr", 0)
+        l_wr = shadow_summary.get("live_wr",   0)
+        if s_wr > l_wr + 10:
+            notes.append({"icon": "⚠️", "text": f"Shadow WR {s_wr:.0f}% >> live WR {l_wr:.0f}% — filters may be blocking good setups", "ts": ts})
+        else:
+            notes.append({"icon": "✅", "text": f"Live filters beating shadows ({l_wr:.0f}% vs {s_wr:.0f}%)", "ts": ts})
+
+    if not notes:
+        return
+
+    notes_file = STATE_DIR / "strategy_notes.json"
+    existing   = []
+    if notes_file.exists():
+        try:
+            existing = json.loads(notes_file.read_text())
+        except Exception:
+            existing = []
+
+    # Prepend new notes, keep last 20
+    combined = notes + [n for n in existing if n not in notes]
+    notes_file.write_text(json.dumps(combined[:20], indent=2))
 
 
 # ---------------------------------------------------------------------------
