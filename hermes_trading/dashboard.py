@@ -1488,16 +1488,16 @@ function renderSentiment(sentiment, data) {
     macroItems.push({
       label: 'Total3 (alts)',
       value: total3 !== '—' ? total3.toUpperCase() : '—',
-      note:  btcDomRising ? 'BTC dominance rising' : 'BTC dom stable/falling',
-      tip:   'SOL + BNB + ADA basket vs BTC. Bullish = small caps outperforming. BTC.D rising = capital flowing back to BTC.',
+      note:  btcDomRising ? '⚠️ BTC.D rising → capital leaving alts' : '✅ BTC.D stable/falling → alts holding',
+      tip:   'SOL + BNB + ADA basket vs BTC. Bullish = alts outperforming BTC. BTC.D rising = capital rotating back to BTC → bearish for alts.',
       color: biasColor(total3),
       pair:  'TOTAL3',
     });
     macroItems.push({
       label: 'Total2 (ex-BTC)',
       value: total2 !== '—' ? total2.toUpperCase() : '—',
-      note:  altSeason ? '🌟 Alt season active' : 'No alt season',
-      tip:   'Total crypto market cap excluding BTC (ETH+alts). Computed from ETH 1H candles vs BTC dominance. Bullish = alts outperforming.',
+      note:  altSeason ? '🌟 Alt season — alts outperforming BTC' : btcDomRising ? '⚠️ No alt season — BTC dominant' : '➖ No alt season',
+      tip:   'Total crypto market cap excluding BTC (ETH+alts). Bullish = alts outperforming BTC. Alt season = sustained rotation into alts.',
       color: biasColor(total2),
       pair:  'TOTAL2',
     });
