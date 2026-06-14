@@ -142,6 +142,40 @@ async def run_all(universe: list[str], total_capital: float, force_pairs: list[s
                          "position_size_r": 0.05, "stop_loss_pct": 1.8, "take_profit_pct": 3.0}
     active_pairs: list[str] = []
 
+    # ── Fast boot: spin up loops immediately from position files + goal.yaml
+    # so pairs start ticking before the first (slow) rescan completes.
+    def _boot_pairs() -> list[str]:
+        import json as _j
+        boot = []
+        for pf in STATE_DIR.glob("position_*.json"):
+            try:
+                pos = _j.loads(pf.read_text())
+                pair = pos.get("asset")
+                if pair and pair not in boot:
+                    boot.append(pair)
+                    print(f"[boot] restoring {pair} from position file", flush=True)
+            except Exception:
+                pass
+        if force_pairs:
+            for p in force_pairs:
+                if p not in boot:
+                    boot.append(p)
+        elif not boot:
+            goal = load_goal()
+            for p in goal.get("pairs", [])[:regime_info.get("max_pairs", 5)]:
+                if p not in boot:
+                    boot.append(p)
+        return boot
+
+    _boot = _boot_pairs()
+    capital_per_boot = total_capital / max(len(_boot), 1)
+    for pair in _boot:
+        loops[pair]  = TradingLoop(asset=pair, capital_usdt=capital_per_boot)
+        queues[pair] = asyncio.Queue(maxsize=1)
+        tasks[pair]  = asyncio.create_task(loops[pair].run(market_queue=queues[pair]))
+    active_pairs = list(loops.keys())
+    print(f"[boot] pre-seeded {len(active_pairs)} pairs: {active_pairs}", flush=True)
+
     async def rescan():
         nonlocal regime_info, active_pairs
 
