@@ -54,6 +54,21 @@ from hermes_trading.self_improve import register_feature, active_feature_labels
 
 STATE_DIR           = Path(os.getenv("STATE_DIR", Path(__file__).parent.parent / "state"))
 TRADES_FILE         = STATE_DIR / "trades.jsonl"
+
+
+def _load_real_trades() -> list[dict]:
+    """Load trades.jsonl excluding shutdown artifacts (redeploy fake-closes)."""
+    import json as _j
+    trades = []
+    try:
+        for line in TRADES_FILE.read_text().splitlines():
+            if line.strip():
+                t = _j.loads(line)
+                if t.get("close_reason") != "shutdown":
+                    trades.append(t)
+    except Exception:
+        pass
+    return trades
 STRATEGY_FILE       = STATE_DIR / "strategy.yaml"
 DD_FILE             = STATE_DIR / "drawdown.json"   # portfolio-level drawdown state
 CONTROLS_FILE       = STATE_DIR / "controls.json"   # manual override commands
@@ -867,14 +882,7 @@ class TradingLoop:
                 self._save_position()
 
                 # Email notification
-                all_trades = []
-                try:
-                    for line in TRADES_FILE.read_text().splitlines():
-                        if line.strip():
-                            import json as _json
-                            all_trades.append(_json.loads(line))
-                except Exception:
-                    pass
+                all_trades = _load_real_trades()
                 wins   = sum(1 for t in all_trades if t.get("pnl_pct", 0) > 0)
                 losses = len(all_trades) - wins
                 stats  = {
@@ -1458,16 +1466,7 @@ class TradingLoop:
         )
 
         # Shadow resolution + downtime trigger (self-throttled, non-blocking)
-        try:
-            all_trades_maint = []
-            if TRADES_FILE.exists():
-                for line in TRADES_FILE.read_text().splitlines():
-                    if line.strip():
-                        import json as _j
-                        all_trades_maint.append(_j.loads(line))
-        except Exception:
-            all_trades_maint = []
-        self._tick_maintenance(current_price, all_trades_maint)
+        self._tick_maintenance(current_price, _load_real_trades())
 
     # ------------------------------------------------------------------
     # Downtime + shadow trade maintenance (called each tick, self-throttled)
