@@ -147,9 +147,14 @@ def _portfolio_stats(trades: list[dict]) -> dict:
     total_net_pnl    = sum(
         t.get("net_pnl_usdt", _trade_pnl_usdt(t)) for t in trades
     )
-    # Cost drag: what % of gross PnL was eaten by fees + slippage (0 if no gross PnL)
-    cost_drag = ((total_commission + total_slippage) / abs(total_pnl_usdt) * 100
-                 if total_pnl_usdt != 0 else 0.0)
+    # Cost drag: fees + slippage as % of total notional traded (not % of gross PnL
+    # which explodes when PnL is tiny). Round-trip notional = usdt_deployed * leverage * 2.
+    total_notional = sum(
+        (t.get("usdt_deployed", 0) or 0) * (t.get("leverage", 1) or 1) * 2
+        for t in trades
+    )
+    cost_drag = ((total_commission + total_slippage) / total_notional * 100
+                 if total_notional > 0 else 0.0)
 
     best  = max(trades, key=lambda t: t.get("pnl_pct", 0))
     worst = min(trades, key=lambda t: t.get("pnl_pct", 0))
@@ -453,7 +458,9 @@ _HTML = r"""<!DOCTYPE html>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
   body { background:#0f172a; color:#e2e8f0; font-family:'Inter',system-ui,sans-serif; }
-  .card { background:#1e293b; border:1px solid #334155; border-radius:12px; padding:20px; }
+  .card { background:#1e293b; border:1px solid #334155; border-radius:12px; padding:16px; overflow:hidden; }
+  .card .text-2xl { font-size:clamp(1rem, 2vw, 1.5rem); }
+  .card .text-xl  { font-size:clamp(0.9rem, 1.8vw, 1.25rem); }
   .badge { display:inline-block; padding:2px 10px; border-radius:999px; font-size:0.75rem; font-weight:600; }
   .pos-long  { color:#34d399; }
   .pos-short { color:#f87171; }
@@ -619,8 +626,8 @@ _HTML = r"""<!DOCTYPE html>
   </div>
   <div class="card">
     <p class="text-slate-400 text-xs mb-1">FEES + SLIP</p>
-    <p id="stat-costs" class="text-2xl font-bold text-orange-400">$0.00</p>
-    <p id="stat-cost-drag" class="text-slate-500 text-xs mt-1">0% of gross PnL</p>
+    <p id="stat-costs" class="text-xl font-bold text-orange-400">$0.00</p>
+    <p id="stat-cost-drag" class="text-slate-500 text-xs mt-1">0% of notional</p>
   </div>
 </div>
 
@@ -1813,7 +1820,7 @@ async function refresh() {
     document.getElementById('stat-costs').textContent = '-$' + totalCosts.toFixed(4);
     const dragPct = p.cost_drag_pct || 0;
     document.getElementById('stat-cost-drag').textContent =
-      dragPct.toFixed(1) + '% of gross' +
+      dragPct.toFixed(2) + '% of notional' +
       (p.total_commission_usdt ? ' · fees $' + (p.total_commission_usdt||0).toFixed(4) : '');
 
     // Chart
