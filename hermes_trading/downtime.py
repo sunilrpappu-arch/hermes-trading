@@ -121,6 +121,26 @@ async def run_downtime(
         elif shadow_summary["gap"] < -15:
             lines.append("  ✅ Live filters outperforming shadows — gates are adding value")
 
+    # 6. Trailing SL analysis
+    trail_summary = _trailing_sl_analysis(all_trades)
+    if trail_summary:
+        lines.append("\n🎯 <b>Trailing SL analysis</b>")
+        lines.append(
+            f"  Trailed: {trail_summary['trailed_n']} trades · "
+            f"WR {trail_summary['trailed_wr']:.0f}% · PnL {trail_summary['trailed_pnl']:+.2f}%"
+        )
+        lines.append(
+            f"  Non-trailed: {trail_summary['normal_n']} trades · "
+            f"WR {trail_summary['normal_wr']:.0f}% · PnL {trail_summary['normal_pnl']:+.2f}%"
+        )
+        if trail_summary["stopped_at_breakeven"] > 0:
+            lines.append(f"  ⚠️ {trail_summary['stopped_at_breakeven']} trades stopped at breakeven (trail may be too tight)")
+        if trail_summary["trailed_n"] >= 5:
+            if trail_summary["trailed_pnl"] > trail_summary["normal_pnl"] + 1:
+                lines.append("  ✅ Trailing SL locking in more profit than static SL")
+            elif trail_summary["trailed_pnl"] < trail_summary["normal_pnl"] - 1:
+                lines.append("  ⚠️ Trailing SL stopping out too early — consider loosening trail_pct")
+
     summary = "\n".join(lines)
 
     # Persist full results
@@ -525,3 +545,38 @@ def _append_shadow(record: dict):
     SHADOW_TRADES.parent.mkdir(parents=True, exist_ok=True)
     with open(SHADOW_TRADES, "a") as f:
         f.write(json.dumps(record) + "\n")
+
+
+def _trailing_sl_analysis(all_trades: list[dict]) -> dict | None:
+    """Compare trades where trailing SL activated vs static SL trades."""
+    closed = [t for t in all_trades if t.get("pnl_pct") is not None and t.get("close_reason") != "shutdown"]
+    if len(closed) < 3:
+        return None
+
+    trailed = [t for t in closed if t.get("sl_method") in ("breakeven", ) or
+               (t.get("sl_method") or "").startswith("trail@")]
+    normal  = [t for t in closed if t not in trailed]
+
+    def _stats(trades):
+        if not trades:
+            return 0, 0.0, 0.0
+        wr  = sum(1 for t in trades if (t.get("pnl_pct") or 0) > 0) / len(trades) * 100
+        pnl = sum((t.get("pnl_pct") or 0) * 100 for t in trades)
+        return len(trades), round(wr, 1), round(pnl, 2)
+
+    tn, twr, tpnl = _stats(trailed)
+    nn, nwr, npnl = _stats(normal)
+
+    stopped_at_be = sum(1 for t in trailed
+                        if t.get("close_reason") == "stop_loss"
+                        and t.get("sl_method") == "breakeven")
+
+    return {
+        "trailed_n":           tn,
+        "trailed_wr":          twr,
+        "trailed_pnl":         tpnl,
+        "normal_n":            nn,
+        "normal_wr":           nwr,
+        "normal_pnl":          npnl,
+        "stopped_at_breakeven": stopped_at_be,
+    }

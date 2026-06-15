@@ -826,8 +826,51 @@ class TradingLoop:
             else:
                 sl_lvl = self.open_position.get("sl_price")
                 tp_lvl = self.open_position.get("tp_price")
+
+                # ── Trailing SL ──────────────────────────────────────────
+                # Phase 1: move to breakeven once price reaches 1R profit
+                # Phase 2: trail at 50% of peak gain beyond breakeven
+                trail_cfg     = strategy.get("trailing_sl", {})
+                trail_enabled = trail_cfg.get("enabled", True)
+                trail_pct     = float(trail_cfg.get("trail_pct", 0.50))
+
+                if trail_enabled and sl_lvl and tp_lvl:
+                    entry_p  = float(self.open_position.get("entry_price", 0) or 0)
+                    orig_sl  = float(self.open_position.get("orig_sl_price", sl_lvl) or sl_lvl)
+                    sl_dist  = abs(entry_p - orig_sl)
+                    one_r    = (entry_p + sl_dist) if pos_direction == "long" else (entry_p - sl_dist)
+
+                    if sl_dist > 0:
+                        if pos_direction == "long" and current_price >= one_r:
+                            peak    = max(float(self.open_position.get("peak_price", current_price) or current_price), current_price)
+                            self.open_position["peak_price"] = peak
+                            trail_sl = peak - trail_pct * (peak - entry_p)
+                            new_sl   = max(trail_sl, entry_p, sl_lvl)
+                            if new_sl > sl_lvl:
+                                moved = "breakeven" if abs(new_sl - entry_p) < entry_p * 0.0001 else f"trail@{trail_pct:.0%}"
+                                print(f"  [TRAIL] {self.asset} SL {sl_lvl:.6g}→{new_sl:.6g} ({moved})", flush=True)
+                                self.open_position.setdefault("orig_sl_price", sl_lvl)
+                                self.open_position["sl_price"]  = new_sl
+                                self.open_position["sl_method"] = moved
+                                self._save_position()
+                                sl_lvl = new_sl
+
+                        elif pos_direction == "short" and current_price <= one_r:
+                            peak    = min(float(self.open_position.get("peak_price", current_price) or current_price), current_price)
+                            self.open_position["peak_price"] = peak
+                            trail_sl = peak + trail_pct * (entry_p - peak)
+                            new_sl   = min(trail_sl, entry_p, sl_lvl)
+                            if new_sl < sl_lvl:
+                                moved = "breakeven" if abs(new_sl - entry_p) < entry_p * 0.0001 else f"trail@{trail_pct:.0%}"
+                                print(f"  [TRAIL] {self.asset} SL {sl_lvl:.6g}→{new_sl:.6g} ({moved})", flush=True)
+                                self.open_position.setdefault("orig_sl_price", sl_lvl)
+                                self.open_position["sl_price"]  = new_sl
+                                self.open_position["sl_method"] = moved
+                                self._save_position()
+                                sl_lvl = new_sl
+
                 if sl_lvl and tp_lvl:
-                    # Dynamic level triggers (structural / Fibonacci)
+                    # Dynamic level triggers (structural / Fibonacci / trailed)
                     if pos_direction == "long":
                         if current_price <= sl_lvl:
                             should_close, close_reason = True, "stop_loss"
@@ -840,8 +883,6 @@ class TradingLoop:
                             should_close, close_reason = True, "take_profit"
                 else:
                     # Legacy fallback for positions opened before v18 (no sl_price/tp_price).
-                    # Use raw price_pct (not divided by leverage) — the SL was placed at
-                    # stop_loss_pct from entry, so that's the correct trigger distance.
                     if price_pct <= -stop_loss_pct:
                         should_close, close_reason = True, "stop_loss"
                     elif price_pct >= take_profit_pct:

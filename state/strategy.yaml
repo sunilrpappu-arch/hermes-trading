@@ -44,4 +44,11 @@ take_profit_pct: 3.0
 stop_loss_pct:   1.8
 position_size_r: 0.05
 
-version: '09'
+# Trailing SL — activates once price reaches 1R profit
+# Phase 1: move SL to breakeven at 1R
+# Phase 2: trail at 50% of peak gain (locks in half the move)
+trailing_sl:
+  enabled:       true
+  trail_pct:     0.50   # trail SL at 50% of (peak - entry)
+
+version: '10'
