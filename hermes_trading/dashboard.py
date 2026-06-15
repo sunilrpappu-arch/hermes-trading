@@ -567,12 +567,25 @@ _HTML = r"""<!DOCTYPE html>
       </div>
 
       <div class="rounded-lg bg-slate-800 p-4">
+        <p class="text-slate-400 text-xs font-semibold uppercase mb-2">Risk Management</p>
+        <div class="space-y-1">
+          <div><span class="text-white">Stop Loss</span> — 1.8% from entry (structural swing high/low when available)</div>
+          <div><span class="text-white">Take Profit</span> — pattern-based (triple bottom, descending triangle etc.) or 3% fixed</div>
+          <div><span class="text-white">Trailing SL</span> — activates at 1R profit → moves to breakeven, then trails at 50% of peak gain</div>
+          <div><span class="text-white">Per-pair cap</span> — 10% drawdown → pair paused</div>
+          <div><span class="text-white">Portfolio cap</span> — 8% drawdown → all entries halted</div>
+          <div><span class="text-white">Post-SL cooldown</span> — 30 min wait after a stop-loss before re-entering same pair</div>
+        </div>
+      </div>
+
+      <div class="rounded-lg bg-slate-800 p-4">
         <p class="text-slate-400 text-xs font-semibold uppercase mb-2">Self-Improvement Cycle</p>
         <div class="space-y-1">
           <div><span class="text-white">Every 5 trades</span> — reflection: WR, avg R:R, regime breakdown, pattern performance</div>
           <div><span class="text-white">After 8h silence</span> — downtime: idle diagnosis, OOS backtest, R:R bleed check, shadow trade review</div>
           <div><span class="text-white">R:R bleed check</span> — if pattern TP WR lags structural TP by &gt; 10pp (≥ 5 samples) → flags relaxed 0.75× R:R</div>
           <div><span class="text-white">Shadow trading</span> — blocked setups tracked 48h forward to validate gates</div>
+          <div><span class="text-white">Trailing SL analysis</span> — compares trailed vs static trades; flags if trail stopping out too early or locking in more profit</div>
         </div>
       </div>
 
