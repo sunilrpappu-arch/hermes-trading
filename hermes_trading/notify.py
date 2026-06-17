@@ -26,7 +26,7 @@ def _send_email(subject: str, body: str) -> bool:
         return False
     try:
         payload = json.dumps({
-            "from":    "Hermes <hermes@resend.dev>",
+            "from":    "Hermes Crypto <hermes@resend.dev>",
             "to":      [to],
             "subject": subject,
             "text":    body,
