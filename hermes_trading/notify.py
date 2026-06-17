@@ -24,7 +24,7 @@ def _send_email(subject: str, body: str) -> bool:
     """Send alert email via Gmail SMTP (TLS port 587). Works on Railway."""
     user     = os.getenv("GMAIL_USER", "")
     password = os.getenv("GMAIL_APP_PASSWORD", "")
-    to       = os.getenv("ALERT_EMAIL_TO", user)
+    to       = os.getenv("GMAIL_TO") or os.getenv("ALERT_EMAIL_TO") or user
     if not user or not password:
         print("[notify] email skipped — GMAIL_USER or GMAIL_APP_PASSWORD not set", flush=True)
         return False
