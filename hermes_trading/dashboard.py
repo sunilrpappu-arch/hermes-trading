@@ -102,6 +102,18 @@ def _read_strategy_notes() -> list:
         return []
 
 
+def _read_notifications(limit: int = 50) -> list:
+    nf = STATE_DIR / "notifications.jsonl"
+    if not nf.exists():
+        return []
+    try:
+        lines = [l for l in nf.read_text().splitlines() if l.strip()]
+        entries = [json.loads(l) for l in lines[-limit:]]
+        return list(reversed(entries))  # newest first
+    except Exception:
+        return []
+
+
 def _read_strategy() -> dict:
     sf = STATE_DIR / "strategy.yaml"
     if not sf.exists():
@@ -232,6 +244,7 @@ async def api_state():
         "sentiment":        sentiment,
         "active_features":  _read_active_features(),
         "strategy_notes":   _read_strategy_notes(),
+        "notifications":    _read_notifications(),
     })
 
 
@@ -499,6 +512,11 @@ _HTML = r"""<!DOCTYPE html>
       class="px-3 py-1 rounded-lg text-xs bg-slate-700 border border-slate-600 text-slate-300 hover:text-white hover:bg-slate-600 transition">
       📋 Strategy
     </button>
+    <button onclick="document.getElementById('notify-modal').classList.remove('hidden');renderNotifications()"
+      class="px-3 py-1 rounded-lg text-xs bg-slate-700 border border-slate-600 text-slate-300 hover:text-white hover:bg-slate-600 transition relative">
+      🔔 Alerts
+      <span id="notify-unread" class="hidden absolute -top-1 -right-1 w-2 h-2 rounded-full bg-red-500"></span>
+    </button>
     <span id="refresh-spinner" class="spinner"></span>
   </div>
 </div>
@@ -597,6 +615,22 @@ _HTML = r"""<!DOCTYPE html>
       </div>
 
     </div>
+  </div>
+</div>
+
+<!-- Notifications Modal -->
+<div id="notify-modal" class="hidden fixed inset-0 z-50 flex items-start justify-center pt-10 px-4"
+     style="background:rgba(0,0,0,0.7)" onclick="if(event.target===this)this.classList.add('hidden')">
+  <div class="w-full max-w-2xl rounded-2xl overflow-hidden" style="background:#0f172a;border:1px solid #334155;max-height:80vh;display:flex;flex-direction:column">
+    <div class="flex items-center justify-between px-5 py-4 border-b border-slate-700">
+      <div>
+        <span class="font-bold text-white">🔔 Hermes Alerts</span>
+        <span class="text-slate-500 text-xs ml-2">all notifications — including Telegram failures</span>
+      </div>
+      <button onclick="document.getElementById('notify-modal').classList.add('hidden')"
+        class="text-slate-400 hover:text-white text-xl leading-none">✕</button>
+    </div>
+    <div id="notify-list" class="overflow-y-auto p-4 space-y-2 text-sm" style="flex:1"></div>
   </div>
 </div>
 
@@ -1477,6 +1511,30 @@ function renderSessionBar(heartbeats) {
 
 // ── Fear/Greed + Black Swan rendering ───────────────────────────────────────
 
+function renderNotifications(notifs) {
+  const list = document.getElementById('notify-list');
+  const badge = document.getElementById('notify-unread');
+  if (!notifs || !notifs.length) {
+    list.innerHTML = '<p class="text-slate-500 text-center py-8">No notifications yet.</p>';
+    if (badge) badge.classList.add('hidden');
+    return;
+  }
+  const unread = notifs.filter(n => !n.delivered).length;
+  if (badge) { unread > 0 ? badge.classList.remove('hidden') : badge.classList.add('hidden'); }
+  list.innerHTML = notifs.slice().reverse().map(n => {
+    const ts = n.ts ? new Date(n.ts).toLocaleString() : '';
+    const icon = n.delivered ? '✅' : '❌';
+    const txt = (n.message || '').replace(/<[^>]*>/g, '').trim();
+    return `<div class="bg-slate-700 rounded p-3">
+      <div class="flex justify-between items-center mb-1">
+        <span class="text-xs text-slate-400">${ts}</span>
+        <span title="${n.delivered ? 'Delivered' : 'Not delivered'}">${icon}</span>
+      </div>
+      <div class="text-slate-200 text-sm whitespace-pre-wrap">${txt}</div>
+    </div>`;
+  }).join('');
+}
+
 function renderStrategyNotes(notes) {
   const section = document.getElementById('strategy-notes-section');
   const list    = document.getElementById('strategy-notes-list');
@@ -1864,6 +1922,9 @@ async function refresh() {
 
     // Trades
     renderTrades(data.recent_trades || []);
+
+    // Notifications badge (unread dot update on every refresh)
+    renderNotifications(data.notifications || []);
 
     // Hermes strategy notes
     renderStrategyNotes(data.strategy_notes || []);
