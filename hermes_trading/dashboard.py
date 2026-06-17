@@ -1563,7 +1563,7 @@ function renderNotifications(notifs) {
   if (badge) { unread > 0 ? badge.classList.remove('hidden') : badge.classList.add('hidden'); }
   if (notifs.length > _lastNotifCount && _lastNotifCount > 0) _playChime();
   _lastNotifCount = notifs.length;
-  list.innerHTML = notifs.slice().reverse().map(n => {
+  list.innerHTML = notifs.map(n => {
     const ts = n.ts ? new Date(n.ts).toLocaleString() : '';
     const icon = n.delivered ? '✅' : '❌';
     const txt = (n.message || '').replace(/<[^>]*>/g, '').trim();
