@@ -195,6 +195,22 @@ async def improve(
 # Diagnosis
 # ---------------------------------------------------------------------------
 
+def _shadow_wr() -> float | None:
+    """Read shadow trade WR from shadow_trades.jsonl. Returns None if insufficient data."""
+    shadow_file = STATE_DIR / "shadow_trades.jsonl"
+    if not shadow_file.exists():
+        return None
+    try:
+        import json as _j
+        resolved = [_j.loads(l) for l in shadow_file.read_text().splitlines()
+                    if l.strip() and _j.loads(l).get("outcome")]
+        if len(resolved) < 10:
+            return None
+        return sum(1 for t in resolved if t["outcome"] == "tp") / len(resolved) * 100
+    except Exception:
+        return None
+
+
 def diagnose(trades: list[dict], strategy: dict) -> list[dict]:
     """
     Analyse trade history and return a prioritised list of hypotheses.
@@ -208,6 +224,10 @@ def diagnose(trades: list[dict], strategy: dict) -> list[dict]:
         r = t.get("pair_regime") or t.get("regime_at_entry", "neutral")
         by_regime.setdefault(r, []).append(t)
 
+    live_wr     = _wr(trades) if trades else 0
+    shadow_wr_v = _shadow_wr()
+    shadow_gap  = (shadow_wr_v - live_wr) if shadow_wr_v is not None else 0
+
     # ── Bull regime: check long threshold ────────────────────────────────
     bull_trades = by_regime.get("bull", [])
     if len(bull_trades) >= MIN_TRADES_TO_DIAGNOSE:
@@ -217,30 +237,42 @@ def diagnose(trades: list[dict], strategy: dict) -> list[dict]:
         lo, hi = PARAM_BOUNDS["bull.long_threshold"]
         step   = PARAM_STEPS["bull.long_threshold"]
 
-        if bull_wr < 40:
-            # Too many losses in bull regime → be more selective (lower RSI threshold)
+        if shadow_gap > 15 and current_thr < hi:
+            # Shadow trades winning much more than live — filters too tight, relax threshold
+            proposed = min(hi, current_thr + step)
+            hypotheses.append({
+                "param":        "bull.long_threshold",
+                "current_val":  current_thr,
+                "proposed_val": proposed,
+                "reason":       f"Shadow WR {shadow_wr_v:.0f}% >> live WR {live_wr:.0f}% (gap={shadow_gap:.0f}pp) — filters blocking winners, raise RSI threshold",
+                "priority":     1,
+                "regime_wr":    bull_wr,
+                "sample_n":     len(bull_trades),
+            })
+        elif bull_wr < 40 and shadow_gap <= 10:
+            # Losing AND shadows not outperforming → genuinely bad setups, tighten
             proposed = max(lo, current_thr - step)
             if proposed != current_thr:
                 hypotheses.append({
-                    "param":       "bull.long_threshold",
-                    "current_val": current_thr,
+                    "param":        "bull.long_threshold",
+                    "current_val":  current_thr,
                     "proposed_val": proposed,
-                    "reason":      f"Bull regime WR={bull_wr:.0f}% < 40% — tighten RSI dip threshold",
-                    "priority":    1,
-                    "regime_wr":   bull_wr,
-                    "sample_n":    len(bull_trades),
+                    "reason":       f"Bull regime WR={bull_wr:.0f}% < 40% with no shadow gap — tighten RSI dip threshold",
+                    "priority":     1,
+                    "regime_wr":    bull_wr,
+                    "sample_n":     len(bull_trades),
                 })
         elif bull_wr > 65 and current_thr < hi:
-            # Performing well → we can be more aggressive (higher RSI threshold = more entries)
+            # Performing well → relax for more entries
             proposed = min(hi, current_thr + step)
             hypotheses.append({
-                "param":       "bull.long_threshold",
-                "current_val": current_thr,
+                "param":        "bull.long_threshold",
+                "current_val":  current_thr,
                 "proposed_val": proposed,
-                "reason":      f"Bull regime WR={bull_wr:.0f}% > 65% — can relax RSI threshold for more entries",
-                "priority":    3,
-                "regime_wr":   bull_wr,
-                "sample_n":    len(bull_trades),
+                "reason":       f"Bull regime WR={bull_wr:.0f}% > 65% — can relax RSI threshold for more entries",
+                "priority":     3,
+                "regime_wr":    bull_wr,
+                "sample_n":     len(bull_trades),
             })
 
     # ── Bear regime: check short threshold ───────────────────────────────
