@@ -447,7 +447,7 @@ async def api_test_email():
     if ok:
         return JSONResponse({"ok": True, "message": "Test email sent — check your inbox!"})
     return JSONResponse(
-        {"ok": False, "message": "Failed — check GMAIL_USER and GMAIL_APP_PASSWORD in Railway env vars"},
+        {"ok": False, "message": "Failed — check RESEND_API_KEY and GMAIL_TO in Railway env vars"},
         status_code=500,
     )
 
