@@ -1511,6 +1511,26 @@ function renderSessionBar(heartbeats) {
 
 // ── Fear/Greed + Black Swan rendering ───────────────────────────────────────
 
+let _lastNotifCount = 0;
+
+function _playChime() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const freqs = [880, 1100, 1320];
+    freqs.forEach((f, i) => {
+      const osc  = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.frequency.value = f;
+      osc.type = 'sine';
+      const t = ctx.currentTime + i * 0.15;
+      gain.gain.setValueAtTime(0.25, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+      osc.start(t); osc.stop(t + 0.4);
+    });
+  } catch(e) {}
+}
+
 function renderNotifications(notifs) {
   const list = document.getElementById('notify-list');
   const badge = document.getElementById('notify-unread');
@@ -1521,6 +1541,8 @@ function renderNotifications(notifs) {
   }
   const unread = notifs.filter(n => !n.delivered).length;
   if (badge) { unread > 0 ? badge.classList.remove('hidden') : badge.classList.add('hidden'); }
+  if (notifs.length > _lastNotifCount && _lastNotifCount > 0) _playChime();
+  _lastNotifCount = notifs.length;
   list.innerHTML = notifs.slice().reverse().map(n => {
     const ts = n.ts ? new Date(n.ts).toLocaleString() : '';
     const icon = n.delivered ? '✅' : '❌';

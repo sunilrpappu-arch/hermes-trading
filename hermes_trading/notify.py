@@ -1,25 +1,76 @@
 """
-Notification helpers — Telegram bot (HTTPS, works on Railway free tier).
-
-SMTP is blocked by Railway networking. Telegram uses HTTPS only.
+Notification helpers — Telegram bot (HTTPS) + Gmail SMTP fallback.
 
 Set these Railway env vars:
   TELEGRAM_BOT_TOKEN  — from @BotFather
-  TELEGRAM_CHAT_ID    — your personal chat ID (message the bot once, then check getUpdates)
+  TELEGRAM_CHAT_ID    — your personal chat ID
+  GMAIL_USER          — your Gmail address (e.g. you@gmail.com)
+  GMAIL_APP_PASSWORD  — 16-char app password from myaccount.google.com/apppasswords
+  ALERT_EMAIL_TO      — recipient address (defaults to GMAIL_USER if not set)
 """
 from __future__ import annotations
 import os
+import smtplib
 import urllib.request
 import urllib.parse
 import json
+from email.mime.text import MIMEText
 
 
-def _send_telegram(message: str) -> bool:
-    """Send a Telegram message via HTTPS. Returns True on success."""
+_NOTIFY_LOG = None  # set lazily from STATE_DIR
+
+
+def _send_email(subject: str, body: str) -> bool:
+    """Send alert email via Gmail SMTP (TLS port 587). Works on Railway."""
+    user     = os.getenv("GMAIL_USER", "")
+    password = os.getenv("GMAIL_APP_PASSWORD", "")
+    to       = os.getenv("ALERT_EMAIL_TO", user)
+    if not user or not password:
+        print("[notify] email skipped — GMAIL_USER or GMAIL_APP_PASSWORD not set", flush=True)
+        return False
+    try:
+        msg = MIMEText(body, "plain")
+        msg["Subject"] = subject
+        msg["From"]    = user
+        msg["To"]      = to
+        with smtplib.SMTP("smtp.gmail.com", 587, timeout=15) as s:
+            s.starttls()
+            s.login(user, password)
+            s.sendmail(user, [to], msg.as_string())
+        print(f"[notify] email sent ✓ → {to}", flush=True)
+        return True
+    except Exception as e:
+        print(f"[notify] email failed: {e}", flush=True)
+        return False
+
+def _log_notification(message: str, delivered: bool):
+    """Persist every notification to state/notifications.jsonl regardless of Telegram status."""
+    try:
+        from pathlib import Path as _Path
+        from datetime import datetime as _dt, timezone as _tz
+        log = _Path(__file__).parent.parent / "state" / "notifications.jsonl"
+        entry = json.dumps({
+            "ts":        _dt.now(_tz.utc).isoformat(),
+            "message":   message,
+            "delivered": delivered,
+        })
+        with open(log, "a") as f:
+            f.write(entry + "\n")
+    except Exception:
+        pass
+
+
+def _send_telegram(message: str, email_subject: str = "Hermes Alert") -> bool:
+    """Send via Telegram + Gmail. Always logs locally regardless of delivery."""
+    # Email runs in parallel (best-effort, non-blocking to Telegram result)
+    plain = message.replace("<b>", "").replace("</b>", "").replace("<i>", "").replace("</i>", "")
+    _send_email(email_subject, plain)
+
     token   = os.getenv("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
     if not token or not chat_id:
-        print(f"[notify] skipping — TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set", flush=True)
+        print(f"[notify] Telegram skipped — token/chat_id not set", flush=True)
+        _log_notification(message, delivered=False)
         return False
     try:
         payload = urllib.parse.urlencode({
@@ -33,9 +84,11 @@ def _send_telegram(message: str) -> bool:
             result = json.loads(resp.read())
             if result.get("ok"):
                 print(f"[notify] Telegram sent ✓", flush=True)
+                _log_notification(message, delivered=True)
                 return True
     except Exception as e:
         print(f"[notify] Telegram failed: {e}", flush=True)
+    _log_notification(message, delivered=False)
     return False
 
 
@@ -71,7 +124,7 @@ def send_trade_email(trade: dict, stats: dict):
         f"WR: {stats.get('win_rate',0):.0f}%\n"
         f"Total PnL: {'+' if stats.get('total_pnl_usdt',0)>=0 else ''}${stats.get('total_pnl_usdt',0):.4f}"
     )
-    _send_telegram(msg)
+    _send_telegram(msg, email_subject=f"Hermes {outcome} {asset} {sign}{pnl_pct:.1f}%")
 
 
 def send_entry_notification(trade: dict):
@@ -103,9 +156,9 @@ def send_entry_notification(trade: dict):
         msg += f"<b>RSI:</b> {rsi:.1f}\n"
     if mtf_str != "—":
         msg += f"<b>MTF:</b> {mtf_str}\n"
-    _send_telegram(msg)
+    _send_telegram(msg, email_subject=f"Hermes Entry {arrow} {asset} {direction}")
 
 
 def send_reflection_notification(summary: str):
-    """Send a reflection-cycle summary via Telegram."""
-    _send_telegram(f"⚡ <b>Hermes Reflection</b>\n\n{summary}")
+    """Send a reflection-cycle summary via Telegram + email."""
+    _send_telegram(f"⚡ <b>Hermes Reflection</b>\n\n{summary}", email_subject="Hermes Reflection Report")
