@@ -1,47 +1,50 @@
 """
-Notification helpers — Telegram bot (HTTPS) + Gmail SMTP fallback.
+Notification helpers — Telegram bot (HTTPS) + Resend email (HTTPS).
 
 Set these Railway env vars:
   TELEGRAM_BOT_TOKEN  — from @BotFather
   TELEGRAM_CHAT_ID    — your personal chat ID
-  GMAIL_USER          — your Gmail address (e.g. you@gmail.com)
-  GMAIL_APP_PASSWORD  — 16-char app password from myaccount.google.com/apppasswords
-  ALERT_EMAIL_TO      — recipient address (defaults to GMAIL_USER if not set)
+  RESEND_API_KEY      — from resend.com dashboard
+  GMAIL_TO            — recipient address for email alerts
 """
 from __future__ import annotations
 import os
-import smtplib
 import urllib.request
 import urllib.parse
 import json
-from email.mime.text import MIMEText
 
 
 _NOTIFY_LOG = None  # set lazily from STATE_DIR
 
 
 def _send_email(subject: str, body: str) -> bool:
-    """Send alert email via Gmail SMTP (TLS port 587). Works on Railway."""
-    user     = os.getenv("GMAIL_USER", "")
-    password = os.getenv("GMAIL_APP_PASSWORD", "")
-    to       = os.getenv("GMAIL_TO") or os.getenv("ALERT_EMAIL_TO") or user
-    if not user or not password:
-        print("[notify] email skipped — GMAIL_USER or GMAIL_APP_PASSWORD not set", flush=True)
+    """Send alert email via Resend HTTPS API."""
+    api_key = os.getenv("RESEND_API_KEY", "")
+    to      = os.getenv("GMAIL_TO") or os.getenv("ALERT_EMAIL_TO", "")
+    if not api_key or not to:
+        print("[notify] email skipped — RESEND_API_KEY or GMAIL_TO not set", flush=True)
         return False
     try:
-        msg = MIMEText(body, "plain")
-        msg["Subject"] = subject
-        msg["From"]    = user
-        msg["To"]      = to
-        with smtplib.SMTP("smtp.gmail.com", 587, timeout=15) as s:
-            s.starttls()
-            s.login(user, password)
-            s.sendmail(user, [to], msg.as_string())
-        print(f"[notify] email sent ✓ → {to}", flush=True)
-        return True
+        payload = json.dumps({
+            "from":    "Hermes <hermes@resend.dev>",
+            "to":      [to],
+            "subject": subject,
+            "text":    body,
+        }).encode()
+        req = urllib.request.Request(
+            "https://api.resend.com/emails",
+            data=payload,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = json.loads(resp.read())
+            if result.get("id"):
+                print(f"[notify] email sent ✓ → {to} (id={result['id']})", flush=True)
+                return True
     except Exception as e:
         print(f"[notify] email failed: {e}", flush=True)
-        return False
+    return False
 
 def _log_notification(message: str, delivered: bool):
     """Persist every notification to state/notifications.jsonl regardless of Telegram status."""
