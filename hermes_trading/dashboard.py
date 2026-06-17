@@ -433,8 +433,24 @@ async def api_control(request: Request):
 
 
 # ---------------------------------------------------------------------------
-# Telegram test endpoint
+# Telegram + Email test endpoints
 # ---------------------------------------------------------------------------
+
+@app.get("/api/test-email")
+async def api_test_email():
+    """Send a test email to verify Gmail config."""
+    from hermes_trading.notify import _send_email
+    ok = _send_email(
+        subject="Hermes Email Test ✅",
+        body="This is a test email from Hermes.\n\nIf you received this, email alerts are working correctly!"
+    )
+    if ok:
+        return JSONResponse({"ok": True, "message": "Test email sent — check your inbox!"})
+    return JSONResponse(
+        {"ok": False, "message": "Failed — check GMAIL_USER and GMAIL_APP_PASSWORD in Railway env vars"},
+        status_code=500,
+    )
+
 
 @app.get("/api/test-telegram")
 async def api_test_telegram():
@@ -778,6 +794,10 @@ _HTML = r"""<!DOCTYPE html>
     <button onclick="doTestTelegram()"
       class="flex items-center gap-2 px-4 py-2 rounded-lg font-semibold text-sm bg-blue-950 hover:bg-blue-900 text-blue-300 border border-blue-800 transition-colors">
       📨 TEST TELEGRAM
+    </button>
+    <button onclick="doTestEmail()"
+      class="flex items-center gap-2 px-4 py-2 rounded-lg font-semibold text-sm bg-purple-950 hover:bg-purple-900 text-purple-300 border border-purple-800 transition-colors">
+      📧 TEST EMAIL
     </button>
   </div>
 
@@ -2058,6 +2078,17 @@ async function doTestTelegram() {
   showToast('📨 Sending test message…');
   try {
     const r = await fetch('/api/test-telegram');
+    const j = await r.json();
+    showToast(j.ok ? '✅ ' + j.message : '❌ ' + j.message, j.ok ? 'green' : 'red');
+  } catch(e) {
+    showToast('❌ Request failed: ' + e, 'red');
+  }
+}
+
+async function doTestEmail() {
+  showToast('📧 Sending test email…');
+  try {
+    const r = await fetch('/api/test-email');
     const j = await r.json();
     showToast(j.ok ? '✅ ' + j.message : '❌ ' + j.message, j.ok ? 'green' : 'red');
   } catch(e) {
