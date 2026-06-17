@@ -935,11 +935,19 @@ class TradingLoop:
                 }
                 send_trade_email(trade, stats)
 
-                # Reflection cycle — every 5 closed trades
+                # Reflection cycle — every 5 real closed trades
+                # Use a persistent counter file to avoid modulo drift from
+                # shutdown trades or simultaneous pair closes on the same tick.
                 reflection_every = 5
-                if len(all_trades) % reflection_every == 0:
+                _ref_file = STATE_DIR / ".reflection_count"
+                try:
+                    _ref_count = int(_ref_file.read_text().strip()) if _ref_file.exists() else 0
+                except Exception:
+                    _ref_count = 0
+                _ref_count += 1
+                _ref_file.write_text(str(_ref_count))
+                if _ref_count % reflection_every == 0:
                     _run_reflection(all_trades, stats)
-                    # Self-improvement: analyse, backtest, maybe update strategy.yaml
                     asyncio.create_task(
                         _run_self_improvement(all_trades, list(strategy.keys()))
                     )
