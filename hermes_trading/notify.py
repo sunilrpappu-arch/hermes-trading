@@ -100,7 +100,7 @@ def _send_telegram(message: str, email_subject: str = "Hermes Alert") -> bool:
 
 
 def send_trade_email(trade: dict, stats: dict):
-    """Send a trade-close notification via Telegram."""
+    """Send a trade-close notification via Telegram + email."""
     asset     = trade.get("asset", "?")
     direction = trade.get("direction", "?").upper()
     pnl_pct   = (trade.get("pnl_pct", 0) or 0) * 100
@@ -108,21 +108,36 @@ def send_trade_email(trade: dict, stats: dict):
     entry     = trade.get("entry_price", 0)
     exit_p    = trade.get("exit_price", 0)
     reason    = trade.get("close_reason", "?")
+    sl_method = trade.get("sl_method", "")
     regime    = trade.get("regime_at_entry", "?")
     version   = trade.get("strategy_version", "?")
     mode      = trade.get("mode", "paper")
+    deployed  = trade.get("usdt_deployed") or trade.get("position_size_r", 0.05) * 200
+    lev       = trade.get("leverage", 1)
+    conv      = trade.get("conviction_score")
 
     sign    = "+" if pnl_pct >= 0 else ""
     outcome = "✅ WIN" if pnl_pct >= 0 else "❌ LOSS"
+
+    # Enrich close reason with trailing SL context
+    if reason == "stop_loss" and sl_method == "breakeven" and pnl_pct >= 0:
+        reason_str = "trailing SL → breakeven (locked profit)"
+    elif reason == "stop_loss" and (sl_method or "").startswith("trail@"):
+        reason_str = f"trailing SL @ {sl_method.replace('trail@', '')}"
+    else:
+        reason_str = reason
+
+    conv_str = f"  conviction {conv}/5" if conv is not None else ""
 
     msg = (
         f"⚡ <b>Hermes [{mode.upper()}] Trade Closed</b>\n\n"
         f"{outcome}  {sign}{pnl_pct:.2f}%  ({sign}${pnl_usd:.4f})\n\n"
         f"<b>Pair:</b> {asset}\n"
         f"<b>Dir:</b> {direction}\n"
+        f"<b>Capital:</b> ${deployed:.0f}  ·  {lev}x{conv_str}\n"
         f"<b>Entry:</b> ${entry:.6f}\n"
         f"<b>Exit:</b> ${exit_p:.6f}\n"
-        f"<b>Reason:</b> {reason}\n"
+        f"<b>Reason:</b> {reason_str}\n"
         f"<b>Regime:</b> {regime}\n"
         f"<b>Strategy:</b> v{version}\n\n"
         f"<b>Portfolio</b>\n"
@@ -135,7 +150,7 @@ def send_trade_email(trade: dict, stats: dict):
 
 
 def send_entry_notification(trade: dict):
-    """Send a trade-open notification via Telegram."""
+    """Send a trade-open notification via Telegram + email."""
     asset     = trade.get("asset", "?")
     direction = trade.get("direction", "?").upper()
     entry     = trade.get("entry_price", 0)
@@ -149,11 +164,16 @@ def send_entry_notification(trade: dict):
     rsi       = trade.get("rsi_at_entry", None)
     mtf       = trade.get("mtf_signals", [])
     mtf_str   = " · ".join(mtf[:3]) if mtf else "—"
+    deployed  = trade.get("usdt_deployed") or trade.get("position_size_r", 0.05) * 200
+    conv      = trade.get("conviction_score")
 
-    arrow = "↑" if direction == "LONG" else "↓"
+    arrow    = "↑" if direction == "LONG" else "↓"
+    conv_str = f"  conviction {conv}/5" if conv is not None else ""
+
     msg = (
         f"⚡ <b>Hermes [{mode.upper()}] Entry</b> {arrow}\n\n"
-        f"<b>{asset}</b>  {direction}  ·  {regime}  ·  {lev}x\n\n"
+        f"<b>{asset}</b>  {direction}  ·  {regime}  ·  {lev}x\n"
+        f"<b>Capital:</b> ${deployed:.0f}{conv_str}\n\n"
         f"<b>Entry:</b> ${entry:.6f}\n"
         f"<b>SL:</b> ${sl:.6f}\n"
         f"<b>TP:</b> ${tp:.6f}  ({tp_method})\n"
@@ -163,7 +183,7 @@ def send_entry_notification(trade: dict):
         msg += f"<b>RSI:</b> {rsi:.1f}\n"
     if mtf_str != "—":
         msg += f"<b>MTF:</b> {mtf_str}\n"
-    _send_telegram(msg, email_subject=f"Hermes Entry {arrow} {asset} {direction}")
+    _send_telegram(msg, email_subject=f"Hermes Entry {arrow} {asset} {direction} ${deployed:.0f}")
 
 
 def send_reflection_notification(summary: str):
