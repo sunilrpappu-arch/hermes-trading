@@ -36,12 +36,16 @@ PAIR_RSI_MIN_TRADES = 10
 
 # Bounds for each tunable parameter
 PARAM_BOUNDS = {
-    "bull.long_threshold":        (25, 45),
-    "bear.short_threshold":       (55, 72),
-    "sideways.range_entry_pct":   (0.10, 0.30),
-    "mtf.require_signals":        (0, 2),
-    "stop_loss_pct":              (1.0, 3.5),
-    "take_profit_pct":            (2.0, 5.0),
+    "bull.long_threshold":                  (25, 45),
+    "bear.short_threshold":                 (55, 72),
+    "sideways.range_entry_pct":             (0.10, 0.30),
+    "mtf.require_signals":                  (0, 2),
+    "stop_loss_pct":                        (1.0, 3.5),
+    "take_profit_pct":                      (2.0, 5.0),
+    "conviction_sizing.low":                (20, 50),
+    "conviction_sizing.medium":             (30, 75),
+    "conviction_sizing.high":               (50, 125),
+    "conviction_sizing.very_high":          (75, 200),
 }
 
 # Step sizes for each parameter
@@ -372,6 +376,70 @@ def diagnose(trades: list[dict], strategy: dict) -> list[dict]:
             "regime_wr":    all_wr,
             "sample_n":     len(trades),
         })
+
+    # ── Conviction tier tuning ────────────────────────────────────────────
+    # Group trades by conviction tier. If a tier has good WR but low capital,
+    # raise it. If a tier has poor WR but high capital, lower it.
+    scored_trades = [t for t in trades if t.get("conviction_score") is not None]
+    if len(scored_trades) >= 10:
+        tier_groups = {"low": [], "medium": [], "high": [], "very_high": []}
+        for t in scored_trades:
+            s = t.get("conviction_score", 2)
+            if s >= 4:
+                tier_groups["very_high"].append(t)
+            elif s >= 3:
+                tier_groups["high"].append(t)
+            elif s >= 2:
+                tier_groups["medium"].append(t)
+            else:
+                tier_groups["low"].append(t)
+
+        sizing = strategy.get("conviction_sizing", {})
+        tier_param_map = {
+            "low":       ("conviction_sizing.low",       20,  50, 5),
+            "medium":    ("conviction_sizing.medium",    30,  75, 5),
+            "high":      ("conviction_sizing.high",      50, 125, 10),
+            "very_high": ("conviction_sizing.very_high", 75, 200, 10),
+        }
+        # Find best and worst performing tiers with enough data
+        tier_stats = {}
+        for tier, tlist in tier_groups.items():
+            if len(tlist) >= 5:
+                tier_stats[tier] = (_wr(tlist), len(tlist), sizing.get(tier, 50))
+
+        if tier_stats:
+            best_tier  = max(tier_stats, key=lambda t: tier_stats[t][0])
+            worst_tier = min(tier_stats, key=lambda t: tier_stats[t][0])
+            best_wr, best_n, best_cap   = tier_stats[best_tier]
+            worst_wr, worst_n, worst_cap = tier_stats[worst_tier]
+
+            # Raise capital on best-performing tier if it has headroom
+            param, lo, hi, step = tier_param_map[best_tier]
+            if best_wr > 60 and best_cap < hi:
+                proposed = min(hi, best_cap + step)
+                hypotheses.append({
+                    "param":        param,
+                    "current_val":  best_cap,
+                    "proposed_val": proposed,
+                    "reason":       f"Tier '{best_tier}' WR={best_wr:.0f}% on {best_n} trades — increase capital allocation",
+                    "priority":     2,
+                    "regime_wr":    best_wr,
+                    "sample_n":     best_n,
+                })
+
+            # Lower capital on worst-performing tier if it's hurting PnL
+            param, lo, hi, step = tier_param_map[worst_tier]
+            if worst_wr < 40 and worst_cap > lo and worst_tier != best_tier:
+                proposed = max(lo, worst_cap - step)
+                hypotheses.append({
+                    "param":        param,
+                    "current_val":  worst_cap,
+                    "proposed_val": proposed,
+                    "reason":       f"Tier '{worst_tier}' WR={worst_wr:.0f}% on {worst_n} trades — reduce capital allocation",
+                    "priority":     2,
+                    "regime_wr":    worst_wr,
+                    "sample_n":     worst_n,
+                })
 
     # Sort by priority
     hypotheses.sort(key=lambda h: h["priority"])
