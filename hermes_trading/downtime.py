@@ -141,6 +141,28 @@ async def run_downtime(
             elif trail_summary["trailed_pnl"] < trail_summary["normal_pnl"] - 1:
                 lines.append("  ⚠️ Trailing SL stopping out too early — consider loosening trail_pct")
 
+    # 7. Capital shadow comparison (dynamic vs fixed)
+    cap_summary = _capital_shadow_analysis(all_trades)
+    if cap_summary:
+        lines.append("\n💰 <b>Dynamic vs Fixed capital</b>")
+        lines.append(
+            f"  Dynamic: ${cap_summary['dynamic_pnl']:+.2f} total  "
+            f"avg ${cap_summary['avg_dynamic']:.0f}/trade"
+        )
+        lines.append(
+            f"  Fixed $50: ${cap_summary['fixed_pnl']:+.2f} total  "
+            f"edge {'+' if cap_summary['edge'] >= 0 else ''}{cap_summary['edge']:+.2f}"
+        )
+        if cap_summary["edge"] > 2:
+            lines.append("  ✅ Dynamic sizing adding value — high-conviction trades outperforming")
+        elif cap_summary["edge"] < -2:
+            lines.append("  ⚠️ Dynamic sizing drag — conviction scoring may need recalibration")
+        tier_lines = []
+        for tier, ts in cap_summary.get("tiers", {}).items():
+            if ts["n"] > 0:
+                tier_lines.append(f"  {tier}: {ts['n']}t WR {ts['wr']:.0f}% PnL ${ts['pnl']:+.2f}")
+        lines.extend(tier_lines)
+
     summary = "\n".join(lines)
 
     # Persist full results
@@ -154,12 +176,12 @@ async def run_downtime(
     })
 
     # Write strategy notes for dashboard modal
-    _write_strategy_notes(diag, oos_result, rr_summary, shadow_summary)
+    _write_strategy_notes(diag, oos_result, rr_summary, shadow_summary, cap_summary)
 
     return summary
 
 
-def _write_strategy_notes(diag, oos_result, rr_summary, shadow_summary):
+def _write_strategy_notes(diag, oos_result, rr_summary, shadow_summary, cap_summary=None):
     notes = []
     ts    = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
@@ -196,6 +218,16 @@ def _write_strategy_notes(diag, oos_result, rr_summary, shadow_summary):
             notes.append({"icon": "⚠️", "text": f"Shadow WR {s_wr:.0f}% >> live WR {l_wr:.0f}% — filters may be blocking good setups", "ts": ts})
         else:
             notes.append({"icon": "✅", "text": f"Live filters beating shadows ({l_wr:.0f}% vs {s_wr:.0f}%)", "ts": ts})
+
+    # Capital shadow comparison
+    if cap_summary and cap_summary.get("n", 0) >= 3:
+        edge = cap_summary["edge"]
+        if edge > 2:
+            notes.append({"icon": "✅", "text": f"Dynamic sizing +${edge:.2f} vs fixed $50 — conviction scoring working", "ts": ts})
+        elif edge < -2:
+            notes.append({"icon": "⚠️", "text": f"Dynamic sizing -${abs(edge):.2f} vs fixed $50 — conviction scoring needs recalibration", "ts": ts})
+        else:
+            notes.append({"icon": "📊", "text": f"Dynamic vs fixed $50: edge ${edge:+.2f} across {cap_summary['n']} trades", "ts": ts})
 
     if not notes:
         return
@@ -579,4 +611,61 @@ def _trailing_sl_analysis(all_trades: list[dict]) -> dict | None:
         "normal_wr":           nwr,
         "normal_pnl":          npnl,
         "stopped_at_breakeven": stopped_at_be,
+    }
+
+
+def _capital_shadow_analysis(all_trades: list[dict]) -> dict | None:
+    """Compare dynamic conviction sizing vs hypothetical fixed $50/trade."""
+    closed = [t for t in all_trades
+              if t.get("pnl_pct") is not None
+              and t.get("close_reason") != "shutdown"
+              and t.get("conviction_score") is not None
+              and t.get("usdt_deployed") is not None]
+    if len(closed) < 3:
+        return None
+
+    fixed = 50.0
+    dynamic_pnl = 0.0
+    fixed_pnl   = 0.0
+
+    tiers: dict[str, dict] = {
+        "low":       {"n": 0, "wins": 0, "pnl": 0.0},
+        "medium":    {"n": 0, "wins": 0, "pnl": 0.0},
+        "high":      {"n": 0, "wins": 0, "pnl": 0.0},
+        "very_high": {"n": 0, "wins": 0, "pnl": 0.0},
+    }
+
+    for t in closed:
+        pnl_pct    = (t.get("pnl_pct") or 0)
+        deployed   = float(t.get("usdt_deployed") or fixed)
+        score      = t.get("conviction_score", 2)
+        dyn_pnl    = deployed * pnl_pct
+        fix_pnl    = fixed    * pnl_pct
+        dynamic_pnl += dyn_pnl
+        fixed_pnl   += fix_pnl
+
+        if score >= 4:
+            tier = "very_high"
+        elif score >= 3:
+            tier = "high"
+        elif score >= 2:
+            tier = "medium"
+        else:
+            tier = "low"
+
+        tiers[tier]["n"]    += 1
+        tiers[tier]["pnl"]  += dyn_pnl
+        tiers[tier]["wins"] += 1 if pnl_pct > 0 else 0
+
+    for td in tiers.values():
+        td["wr"] = round(100 * td["wins"] / td["n"], 1) if td["n"] else 0.0
+        td["pnl"] = round(td["pnl"], 2)
+
+    return {
+        "dynamic_pnl":  round(dynamic_pnl, 2),
+        "fixed_pnl":    round(fixed_pnl, 2),
+        "edge":         round(dynamic_pnl - fixed_pnl, 2),
+        "avg_dynamic":  round(sum(float(t.get("usdt_deployed") or fixed) for t in closed) / len(closed), 1),
+        "n":            len(closed),
+        "tiers":        tiers,
     }

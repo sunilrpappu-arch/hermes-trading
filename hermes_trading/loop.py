@@ -323,6 +323,35 @@ def _run_reflection(trades: list[dict], stats: dict):
     best_pct    = (best.get("pnl_pct") or 0) * 100
     worst_pct   = (worst.get("pnl_pct") or 0) * 100
 
+    # Conviction tier breakdown
+    tier_map = {"low": [], "medium": [], "high": [], "very_high": []}
+    for t in trades:
+        score = t.get("conviction_score")
+        if score is None:
+            continue
+        if score >= 4:
+            tier_map["very_high"].append(t)
+        elif score >= 3:
+            tier_map["high"].append(t)
+        elif score >= 2:
+            tier_map["medium"].append(t)
+        else:
+            tier_map["low"].append(t)
+
+    def _tier_summary(tlist: list) -> str:
+        if not tlist:
+            return "—"
+        wr  = 100 * sum(1 for t in tlist if (t.get("pnl_pct") or 0) > 0) / len(tlist)
+        pnl = sum((t.get("pnl_usdt") or 0) for t in tlist)
+        return f"{len(tlist)}t  WR {wr:.0f}%  ${pnl:+.2f}"
+
+    conviction_str = (
+        f"Low:    {_tier_summary(tier_map['low'])}\n"
+        f"Med:    {_tier_summary(tier_map['medium'])}\n"
+        f"High:   {_tier_summary(tier_map['high'])}\n"
+        f"V.High: {_tier_summary(tier_map['very_high'])}"
+    )
+
     summary = (
         f"🔄 <b>Reflection #{n // 5}</b> — last {len(recent)} trades\n\n"
         f"W/L: {wins_recent}W / {losses_recent}L   "
@@ -331,6 +360,7 @@ def _run_reflection(trades: list[dict], stats: dict):
         f"Worst: {worst.get('asset','?')} {worst_pct:+.2f}%\n"
         f"Reasons: {reasons_str}\n"
         f"Regimes: {regimes_str}\n\n"
+        f"<b>Conviction tiers (all-time):</b>\n{conviction_str}\n\n"
         f"<b>All-time</b>: {stats['total_trades']} trades  "
         f"{stats['wins']}W/{stats['losses']}L  "
         f"WR {stats['win_rate']:.0f}%  "
@@ -544,18 +574,14 @@ class TradingLoop:
         return effective_capital * effective_r
 
     def _conviction_capital(self, strategy: dict, htf_reasons: list, lq_note: str | None,
-                            rsi: float, patterns: list, direction: str) -> float:
-        """Score conviction 0-5 and return capital tier from strategy.yaml."""
+                            rsi: float, patterns: list, direction: str) -> tuple[float, int]:
+        """Score conviction 0-5, return (capital_usdt, score)."""
         score = 0
-        # HTF signal count (0-2 pts)
         score += min(len(htf_reasons), 2)
-        # Liquidity grab = high conviction entry (1 pt)
         if lq_note:
             score += 1
-        # Pattern confluence (1 pt if 2+ patterns)
         if len(patterns) >= 2:
             score += 1
-        # RSI extremity — deeper = higher conviction (1 pt)
         if direction == "long" and rsi < 25:
             score += 1
         elif direction == "short" and rsi > 75:
@@ -563,16 +589,16 @@ class TradingLoop:
 
         tiers = strategy.get("conviction_sizing", {})
         if not tiers:
-            return self.capital_usdt  # fallback: no dynamic sizing configured
+            return self.capital_usdt, score
 
         if score >= 4:
-            return float(tiers.get("very_high", self.capital_usdt))
+            return float(tiers.get("very_high", self.capital_usdt)), score
         elif score >= 3:
-            return float(tiers.get("high", self.capital_usdt))
+            return float(tiers.get("high", self.capital_usdt)), score
         elif score >= 2:
-            return float(tiers.get("medium", self.capital_usdt))
+            return float(tiers.get("medium", self.capital_usdt)), score
         else:
-            return float(tiers.get("low", self.capital_usdt))
+            return float(tiers.get("low", self.capital_usdt)), score
 
     # ------------------------------------------------------------------
     # HTF signal evaluation
@@ -1380,7 +1406,7 @@ class TradingLoop:
             if new_direction:
                 # Recalculate capital based on conviction score
                 _active_patterns = pat_bull_names if new_direction == "long" else pat_bear_names
-                usdt_to_deploy = self._conviction_capital(
+                usdt_to_deploy, _conv_score = self._conviction_capital(
                     strategy, htf_reasons, lq_note, rsi_15m, _active_patterns, new_direction
                 )
                 qty = usdt_to_deploy * entry_leverage / current_price if not is_live() else 0.0
@@ -1427,11 +1453,33 @@ class TradingLoop:
                     "active_features":    active_feature_labels(),
                     "strategy_version":   strategy.get("version", "unknown"),
                     "mode":               "live" if is_live() else "paper",
+                    "conviction_score":   _conv_score,
                 }
                 self._save_position()
+
+                # Shadow log — what fixed $50 would have deployed vs dynamic
+                try:
+                    _fixed_capital = float(strategy.get("conviction_sizing", {}).get("medium", 50))
+                    _shadow_entry = {
+                        "ts":               int(time.time()),
+                        "asset":            self.asset,
+                        "direction":        new_direction,
+                        "entry_price":      current_price,
+                        "conviction_score": _conv_score,
+                        "dynamic_usdt":     usdt_to_deploy,
+                        "fixed_usdt":       _fixed_capital,
+                        "sl_price":         _dyn_levels["sl_price"] if _dyn_levels else None,
+                        "tp_price":         _dyn_levels["tp_price"] if _dyn_levels else None,
+                    }
+                    _cap_shadow_file = STATE_DIR / "capital_shadow.jsonl"
+                    with open(_cap_shadow_file, "a") as _f:
+                        _f.write(json.dumps(_shadow_entry) + "\n")
+                except Exception:
+                    pass
+
                 send_entry_notification({
                     **self.open_position,
-                    "conviction_score": self.open_position.get("conviction_score"),
+                    "conviction_score": _conv_score,
                     "mtf_signals":      htf_reasons,
                 })
                 signals_str = ", ".join(htf_reasons + ([lq_note] if lq_note else []))
