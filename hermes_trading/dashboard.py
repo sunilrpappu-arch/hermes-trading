@@ -528,7 +528,7 @@ _HTML = r"""<!DOCTYPE html>
       class="px-3 py-1 rounded-lg text-xs bg-slate-700 border border-slate-600 text-slate-300 hover:text-white hover:bg-slate-600 transition">
       📋 Strategy
     </button>
-    <button onclick="document.getElementById('notify-modal').classList.remove('hidden');renderNotifications()"
+    <button onclick="document.getElementById('notify-modal').classList.remove('hidden');renderNotifications();_markNotifsRead()"
       class="px-3 py-1 rounded-lg text-xs bg-slate-700 border border-slate-600 text-slate-300 hover:text-white hover:bg-slate-600 transition relative">
       🔔 Alerts
       <span id="notify-unread" class="hidden absolute -top-1 -right-1 w-2 h-2 rounded-full bg-red-500"></span>
@@ -1553,6 +1553,12 @@ function _playChime() {
   } catch(e) {}
 }
 
+function _markNotifsRead() {
+  localStorage.setItem('hermes_notif_read', String(_lastNotifCount));
+  const badge = document.getElementById('notify-unread');
+  if (badge) badge.classList.add('hidden');
+}
+
 function renderNotifications(notifs) {
   const list = document.getElementById('notify-list');
   const badge = document.getElementById('notify-unread');
@@ -1562,9 +1568,11 @@ function renderNotifications(notifs) {
     return;
   }
   const unread = notifs.filter(n => !n.delivered).length;
-  if (badge) { unread > 0 ? badge.classList.remove('hidden') : badge.classList.add('hidden'); }
   if (notifs.length > _lastNotifCount && _lastNotifCount > 0) _playChime();
   _lastNotifCount = notifs.length;
+  // Only show dot if there are new notifications since last read
+  const lastRead = parseInt(localStorage.getItem('hermes_notif_read') || '0');
+  if (badge) { notifs.length > lastRead ? badge.classList.remove('hidden') : badge.classList.add('hidden'); }
   list.innerHTML = notifs.map(n => {
     const ts = n.ts ? new Date(n.ts).toLocaleString() : '';
     const icon = n.delivered ? '✅' : '❌';
