@@ -118,7 +118,7 @@ MAX_CONSECUTIVE_FAILURES = 5
 RETRY_ATTEMPTS         = 3
 PRICE_HISTORY_MAX      = 200
 
-CAPITAL_PER_PAIR_USDT = float(os.getenv("CAPITAL_PER_PAIR_USDT", "200"))
+CAPITAL_PER_PAIR_USDT = float(os.getenv("CAPITAL_PER_PAIR_USDT", "100"))
 
 # ---------------------------------------------------------------------------
 # Portfolio-level drawdown tracker (shared across all pairs in this process)
@@ -542,6 +542,37 @@ class TradingLoop:
         effective_r       = min(position_size_r, regime_params.get("position_size_r", position_size_r))
         effective_capital = min(self.capital_usdt, regime_params.get("capital_per_pair", self.capital_usdt))
         return effective_capital * effective_r
+
+    def _conviction_capital(self, strategy: dict, htf_reasons: list, lq_note: str | None,
+                            rsi: float, patterns: list, direction: str) -> float:
+        """Score conviction 0-5 and return capital tier from strategy.yaml."""
+        score = 0
+        # HTF signal count (0-2 pts)
+        score += min(len(htf_reasons), 2)
+        # Liquidity grab = high conviction entry (1 pt)
+        if lq_note:
+            score += 1
+        # Pattern confluence (1 pt if 2+ patterns)
+        if len(patterns) >= 2:
+            score += 1
+        # RSI extremity — deeper = higher conviction (1 pt)
+        if direction == "long" and rsi < 25:
+            score += 1
+        elif direction == "short" and rsi > 75:
+            score += 1
+
+        tiers = strategy.get("conviction_sizing", {})
+        if not tiers:
+            return self.capital_usdt  # fallback: no dynamic sizing configured
+
+        if score >= 4:
+            return float(tiers.get("very_high", self.capital_usdt))
+        elif score >= 3:
+            return float(tiers.get("high", self.capital_usdt))
+        elif score >= 2:
+            return float(tiers.get("medium", self.capital_usdt))
+        else:
+            return float(tiers.get("low", self.capital_usdt))
 
     # ------------------------------------------------------------------
     # HTF signal evaluation
@@ -1347,6 +1378,13 @@ class TradingLoop:
                     pass
 
             if new_direction:
+                # Recalculate capital based on conviction score
+                _active_patterns = pat_bull_names if new_direction == "long" else pat_bear_names
+                usdt_to_deploy = self._conviction_capital(
+                    strategy, htf_reasons, lq_note, rsi_15m, _active_patterns, new_direction
+                )
+                qty = usdt_to_deploy * entry_leverage / current_price if not is_live() else 0.0
+
                 if is_live():
                     notional = usdt_to_deploy * entry_leverage
                     order = (open_long if new_direction == "long" else open_short)(self.asset, notional)

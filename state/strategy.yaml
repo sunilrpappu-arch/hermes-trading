@@ -42,7 +42,15 @@ drawdown:
 
 take_profit_pct: 3.0
 stop_loss_pct:   1.8
-position_size_r: 0.05
+position_size_r: 1.0   # use full conviction_sizing capital (not a fraction)
+
+# Dynamic capital allocation by conviction score (0-5 pts)
+# Score: HTF signals (0-2) + liquidity grab (1) + 2+ patterns (1) + RSI extremity <25/>75 (1)
+conviction_sizing:
+  low:       30    # score 0-1 — weak setup, minimal capital
+  medium:    50    # score 2   — base case
+  high:      75    # score 3   — good confluence
+  very_high: 100   # score 4+  — liquidity grab + MTF alignment + RSI extreme
 
 # Trailing SL — activates once price reaches 1R profit
 # Phase 1: move SL to breakeven at 1R
@@ -51,4 +59,4 @@ trailing_sl:
   enabled:       true
   trail_pct:     0.50   # trail SL at 50% of (peak - entry)
 
-version: '10'
+version: '11'
