@@ -533,10 +533,26 @@ def _apply_change(strategy: dict, param: str, value) -> dict:
 
 
 def _write_strategy(strategy: dict):
-    """Write updated strategy to disk. Loop.py picks it up on next tick."""
+    """Write updated strategy to disk, preserving keys not touched by self_improve."""
     STRATEGY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    # Load current file and deep-merge so unknown keys (conviction_sizing, trailing_sl etc.)
+    # are never silently dropped by a self_improve rewrite
+    existing = {}
+    if STRATEGY_FILE.exists():
+        try:
+            with open(STRATEGY_FILE) as f:
+                existing = yaml.safe_load(f) or {}
+        except Exception:
+            pass
+    import copy
+    merged = copy.deepcopy(existing)
+    for k, v in strategy.items():
+        if isinstance(v, dict) and isinstance(merged.get(k), dict):
+            merged[k].update(v)
+        else:
+            merged[k] = v
     with open(STRATEGY_FILE, "w") as f:
-        yaml.dump(strategy, f, default_flow_style=False, sort_keys=False)
+        yaml.dump(merged, f, default_flow_style=False, sort_keys=False)
 
 
 def _in_cooldown(param: str) -> bool:

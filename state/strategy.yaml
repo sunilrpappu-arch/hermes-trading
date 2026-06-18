@@ -1,30 +1,35 @@
-# v09 — Regime-separated entry strategy
-# Each pair is classified independently (bull/bear/sideways) using its own 4H ADX + 50MA.
-# Different entry rules apply per regime. MTF is informational only (no hard gate).
+# v25 — Synced local copy with live v24 + added conviction_sizing + trailing_sl
+#        which were lost during self_improve rewrites between v11-v24
+# v24 — Pattern block bypass: RSI <25 or >75 overrides bearish/bullish pattern gate
+#        Sideways MTF dropped to 0: range entries self-confirming, no MACD required
+#        Pattern key_level as priority TP: neckline/breakout target used before swing levels
+# v23 — News RSS sentiment layer: CoinTelegraph/Decrypt/CoinDesk feeds, direction-aware
+#        MTF adjustment (headwind +1, tailwind -1, bypassed when market has priced news)
+#        Active feature manifest: every change tagged + embedded in trade records
+#        Downtime engine: idle diagnosis, OOS backtest, shadow trading after 8h silence
+#        MACD 15m direction-aware scanner conviction (+15 aligned, -10 opposing)
+#        Session breakout mode (v22): Asia/London/US open windows
 
 # Bull regime: price above 50MA on 4H, ADX >= 20
-# Long bias — buy RSI dips. Short only on confirmed liquidity grabs.
 bull:
-  long_threshold:   35      # RSI < 35 in uptrend → buy the dip
-  short_on_lq_only: true    # shorts only when a liquidity grab is confirmed
+  long_threshold:   35
+  short_on_lq_only: true
 
 # Bear regime: price below 50MA on 4H, ADX >= 20
-# Short bias — sell RSI bounces. Long only on confirmed liquidity grabs.
 bear:
-  short_threshold:  60      # RSI > 60 in downtrend → sell the bounce
-  long_on_lq_only:  true    # longs only when a liquidity grab is confirmed
+  short_threshold:  60
+  long_on_lq_only:  true
 
 # Sideways regime: ADX < 20 on 4H — mean-reversion at range extremes
 sideways:
   adx_threshold:   20.0
-  range_entry_pct: 0.20     # enter when price is in bottom/top 20% of PDH-PDL range
+  range_entry_pct: 0.20
   or_bars:         4
   swing_lookback:  20
 
-# MTF signals are logged on every entry but no longer block trades
 mtf:
   enabled:         true
-  require_signals: 0        # 0 = informational only
+  require_signals: 1
 
 trend_filter:
   enabled:   true
@@ -40,23 +45,46 @@ drawdown:
   per_pair_cap:  0.10
   portfolio_cap: 0.08
 
+cooldown:
+  after_stop_loss_minutes: 30
+
+daily_loss:
+  max_loss_pct: 0.03
+
+leverage:
+  sideways:     2.0
+  calm:         2.0
+  normal:       1.5
+  volatile:     1.0
+  extreme:      1.0
+  max_leverage: 3.0
+
 take_profit_pct: 3.0
 stop_loss_pct:   1.8
 position_size_r: 1.0   # use full conviction_sizing capital (not a fraction)
 
 # Dynamic capital allocation by conviction score (0-5 pts)
 # Score: HTF signals (0-2) + liquidity grab (1) + 2+ patterns (1) + RSI extremity <25/>75 (1)
+# Hermes tunes the dollar values via self_improve; we set the structure
 conviction_sizing:
-  low:       30    # score 0-1 — weak setup, minimal capital
+  low:       30    # score 0-1 — weak setup
   medium:    50    # score 2   — base case
   high:      75    # score 3   — good confluence
-  very_high: 100   # score 4+  — liquidity grab + MTF alignment + RSI extreme
+  very_high: 100   # score 4+  — liquidity grab + MTF + RSI extreme
 
 # Trailing SL — activates once price reaches 1R profit
 # Phase 1: move SL to breakeven at 1R
 # Phase 2: trail at 50% of peak gain (locks in half the move)
 trailing_sl:
-  enabled:       true
-  trail_pct:     0.50   # trail SL at 50% of (peak - entry)
+  enabled:   true
+  trail_pct: 0.50
 
-version: '11'
+session_breakout:
+  enabled:              true
+  rsi_relax_pts:        5
+  volume_spike_min:     1.5
+  require_bb_expanding: true
+  min_fg_score:         18
+  max_fg_score:         85
+
+version: '25'
