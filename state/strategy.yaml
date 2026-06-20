@@ -61,7 +61,7 @@ leverage:
 
 take_profit_pct: 3.0
 stop_loss_pct:   1.8
-position_size_r: 1.0   # use full conviction_sizing capital (not a fraction)
+position_size_r: 0.05  # safety fallback only — conviction_sizing overrides at entry
 
 # Dynamic capital allocation by conviction score (0-5 pts)
 # Score: HTF signals (0-2) + liquidity grab (1) + 2+ patterns (1) + RSI extremity <25/>75 (1)

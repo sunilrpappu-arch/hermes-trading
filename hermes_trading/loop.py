@@ -118,7 +118,7 @@ MAX_CONSECUTIVE_FAILURES = 5
 RETRY_ATTEMPTS         = 3
 PRICE_HISTORY_MAX      = 200
 
-CAPITAL_PER_PAIR_USDT = float(os.getenv("CAPITAL_PER_PAIR_USDT", "100"))
+CAPITAL_PER_PAIR_USDT = float(os.getenv("CAPITAL_PER_PAIR_USDT", "50"))  # base capital; conviction sizing overrides this
 
 # ---------------------------------------------------------------------------
 # Portfolio-level drawdown tracker (shared across all pairs in this process)
@@ -589,16 +589,18 @@ class TradingLoop:
 
         tiers = strategy.get("conviction_sizing", {})
         if not tiers:
-            return self.capital_usdt, score
+            # No tiers configured — use a safe fixed amount, never raw capital_usdt
+            return 50.0, score
 
+        # Tier values are absolute dollar amounts — never fall back to capital_usdt
         if score >= 4:
-            return float(tiers.get("very_high", self.capital_usdt)), score
+            return float(tiers.get("very_high", 100)), score
         elif score >= 3:
-            return float(tiers.get("high", self.capital_usdt)), score
+            return float(tiers.get("high", 75)), score
         elif score >= 2:
-            return float(tiers.get("medium", self.capital_usdt)), score
+            return float(tiers.get("medium", 50)), score
         else:
-            return float(tiers.get("low", self.capital_usdt)), score
+            return float(tiers.get("low", 30)), score
 
     # ------------------------------------------------------------------
     # HTF signal evaluation
