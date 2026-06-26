@@ -575,16 +575,35 @@ class TradingLoop:
 
     def _conviction_capital(self, strategy: dict, htf_reasons: list, lq_note: str | None,
                             rsi: float, patterns: list, direction: str) -> tuple[float, int]:
-        """Score conviction 0-5, return (capital_usdt, score)."""
+        """Score conviction 0-5, return (capital_usdt, score).
+
+        Scoring is intentionally strict — most trades should land at 2-3, not 4-5.
+        • HTF: only active signals (MACD crossover/divergence, BB squeeze, RSI divergence).
+          Passive regime signals ("4H uptrend", "above VWAP") don't count — they're
+          already implied by being in bull/bear regime.
+        • LQ grab: only a confirmed wick sweep scores; generic entry-type labels don't.
+        • RSI extremity: stricter thresholds (<20 / >80) so only genuine extremes score.
+        """
         score = 0
-        score += min(len(htf_reasons), 2)
-        if lq_note:
+
+        # Only active HTF signals count (crossovers, divergences, BB squeeze breakouts)
+        active_htf = [
+            r for r in htf_reasons
+            if any(kw in r for kw in ("MACD", "RSI divergence", "squeeze"))
+        ]
+        score += min(len(active_htf), 2)
+
+        # Only real wick-sweep liquidity grabs score, not entry-type labels
+        if lq_note and "lq_grab" in lq_note:
             score += 1
+
         if len(patterns) >= 2:
             score += 1
-        if direction == "long" and rsi < 25:
+
+        # Genuine RSI extremes only (not just the entry RSI threshold)
+        if direction == "long" and rsi < 20:
             score += 1
-        elif direction == "short" and rsi > 75:
+        elif direction == "short" and rsi > 80:
             score += 1
 
         tiers = strategy.get("conviction_sizing", {})

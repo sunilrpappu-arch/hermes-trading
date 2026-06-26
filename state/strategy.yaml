@@ -87,4 +87,4 @@ session_breakout:
   min_fg_score:         18
   max_fg_score:         85
 
-version: '26'
+version: '27'

@@ -544,7 +544,7 @@ _HTML = r"""<!DOCTYPE html>
     <button onclick="document.getElementById('strategy-modal').classList.add('hidden')"
       class="absolute top-4 right-4 text-slate-500 hover:text-white text-xl leading-none">✕</button>
     <h2 class="text-white font-bold text-lg mb-1">⚡ Hermes Strategy · Quick Reference</h2>
-    <p class="text-slate-500 text-xs mb-4">v26 · Self-improving crypto futures bot (paper mode) · Railway SE Asia</p>
+    <p class="text-slate-500 text-xs mb-4">v27 · Self-improving crypto futures bot (paper mode) · Railway SE Asia</p>
     <div class="space-y-4 text-sm text-slate-300">
 
       <div class="rounded-lg bg-slate-800 p-4">
@@ -575,7 +575,7 @@ _HTML = r"""<!DOCTYPE html>
           <div><span class="text-white">Score 2 (medium)</span> — $50 · base case, 1 HTF signal</div>
           <div><span class="text-white">Score 3 (high)</span> — $75 · good confluence</div>
           <div><span class="text-white">Score 4-5 (very high)</span> — $100 · liq-grab + MTF + RSI extreme</div>
-          <div class="text-slate-500 text-xs mt-1">Score = HTF signals (0-2) + liq-grab (+1) + 2+ patterns (+1) + RSI &lt;25/&gt;75 (+1) · Hermes auto-tunes tier values</div>
+          <div class="text-slate-500 text-xs mt-1">Score = active HTF signals (MACD/divergence/BB squeeze, 0-2) + confirmed liq-grab wick sweep (+1) + 2+ patterns (+1) + RSI &lt;20/&gt;80 (+1) · Hermes auto-tunes tier values</div>
         </div>
       </div>
 
