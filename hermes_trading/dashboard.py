@@ -543,57 +543,80 @@ _HTML = r"""<!DOCTYPE html>
   <div class="relative w-full max-w-3xl rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl overflow-y-auto max-h-[85vh] p-6">
     <button onclick="document.getElementById('strategy-modal').classList.add('hidden')"
       class="absolute top-4 right-4 text-slate-500 hover:text-white text-xl leading-none">✕</button>
-    <h2 class="text-white font-bold text-lg mb-4">⚡ Hermes Strategy · Quick Reference</h2>
+    <h2 class="text-white font-bold text-lg mb-1">⚡ Hermes Strategy · Quick Reference</h2>
+    <p class="text-slate-500 text-xs mb-4">v26 · Self-improving crypto futures bot (paper mode) · Railway SE Asia</p>
     <div class="space-y-4 text-sm text-slate-300">
 
       <div class="rounded-lg bg-slate-800 p-4">
-        <p class="text-slate-400 text-xs font-semibold uppercase mb-2">Regime Detection (4H)</p>
+        <p class="text-slate-400 text-xs font-semibold uppercase mb-2">Regime Detection (4H per-pair)</p>
         <div class="space-y-1">
-          <div><span class="text-green-400 font-semibold">Bull</span> — Price &gt; 50MA &amp; ADX ≥ 20 · Longs preferred · Shorts only at liquidity grabs</div>
-          <div><span class="text-red-400 font-semibold">Bear</span> — Price &lt; 50MA &amp; ADX ≥ 20 · Shorts preferred · Longs only at liquidity grabs</div>
-          <div><span class="text-yellow-400 font-semibold">Sideways</span> — ADX &lt; 20 · Mean-reversion at range extremes (bottom 20% long, top 20% short) · MTF = 0</div>
+          <div><span class="text-green-400 font-semibold">Bull</span> — Price &gt; 50MA &amp; ADX ≥ 20 · RSI dip &lt; 35 → long · Shorts only on confirmed liquidity grabs</div>
+          <div><span class="text-red-400 font-semibold">Bear</span> — Price &lt; 50MA &amp; ADX ≥ 20 · RSI bounce &gt; 60 → short · Longs only on confirmed liquidity grabs</div>
+          <div><span class="text-yellow-400 font-semibold">Sideways</span> — ADX &lt; 20 · Range entry bottom 20% (long) / top 20% (short) · MTF gate waived</div>
         </div>
       </div>
 
       <div class="rounded-lg bg-slate-800 p-4">
-        <p class="text-slate-400 text-xs font-semibold uppercase mb-2">Entry Gates (all must pass)</p>
+        <p class="text-slate-400 text-xs font-semibold uppercase mb-2">Entry Gates</p>
         <div class="space-y-1">
-          <div>1. <span class="text-white">Scanner score</span> — Bull long ≥ 35 · Bear short ≥ 60</div>
-          <div>2. <span class="text-white">MTF gate</span> — ≥ 1 higher-TF signal (4H MACD, 4H MA, 1H RSI div, 1H MACD) · waived sideways / liq-grabs</div>
-          <div>3. <span class="text-white">Pattern gate</span> — bearish pattern blocks longs, bullish blocks shorts · bypassed if RSI &lt; 25 (long) or &gt; 75 (short)</div>
-          <div>4. <span class="text-white">Senti-meter</span> — ≤ 10 entries halted · ≥ 93 no new longs</div>
-          <div>5. <span class="text-white">Drawdown / cooldown</span> — 10% per-pair cap · 8% portfolio cap · 30m cooldown after stop-loss</div>
-          <div>6. <span class="text-white">Daily loss</span> — halted if down &gt; 3% on the day</div>
+          <div>1. <span class="text-white">RSI threshold</span> — Bull long RSI &lt; 35 · Bear short RSI &gt; 60 · bypassed by liquidity grab</div>
+          <div>2. <span class="text-white">MTF gate</span> — ≥ 1 HTF signal (4H MACD, 4H MA, 1H RSI div, 1H MACD) · waived sideways &amp; liq-grabs</div>
+          <div>3. <span class="text-white">Pattern gate</span> — bearish pattern blocks longs · bypassed if RSI &lt; 25 or &gt; 75</div>
+          <div>4. <span class="text-white">Min R:R</span> — 1.5× required · trade blocked if TP &lt; 1.5× SL distance</div>
+          <div>5. <span class="text-white">Senti-meter</span> — ≤ 10 all entries halted · ≥ 93 no new longs</div>
+          <div>6. <span class="text-white">Drawdown guards</span> — 10% per-pair · 8% portfolio · 3% daily loss · 30m post-SL cooldown</div>
         </div>
       </div>
 
       <div class="rounded-lg bg-slate-800 p-4">
-        <p class="text-slate-400 text-xs font-semibold uppercase mb-2">TP / SL Logic</p>
+        <p class="text-slate-400 text-xs font-semibold uppercase mb-2">Capital · Conviction Sizing</p>
         <div class="space-y-1">
-          <div><span class="text-white">Default</span> — TP 3% · SL 1.8% · min R:R 1.0×</div>
-          <div><span class="text-white">Pattern TP</span> — measured move from neckline/breakout · min R:R relaxed to 0.75× if confidence ≥ 70%</div>
-          <div><span class="text-white">Dynamic levels</span> — swing high/low · Fibonacci · VWAP bands override defaults when R:R improves</div>
-          <div><span class="text-white">Session breakout</span> — Asia/London/US open windows · requires BB expansion + volume ≥ 1.5× avg</div>
+          <div><span class="text-white">Score 0-1 (low)</span> — $30 · weak setup, minimal confluence</div>
+          <div><span class="text-white">Score 2 (medium)</span> — $50 · base case, 1 HTF signal</div>
+          <div><span class="text-white">Score 3 (high)</span> — $75 · good confluence</div>
+          <div><span class="text-white">Score 4-5 (very high)</span> — $100 · liq-grab + MTF + RSI extreme</div>
+          <div class="text-slate-500 text-xs mt-1">Score = HTF signals (0-2) + liq-grab (+1) + 2+ patterns (+1) + RSI &lt;25/&gt;75 (+1) · Hermes auto-tunes tier values</div>
         </div>
       </div>
 
       <div class="rounded-lg bg-slate-800 p-4">
-        <p class="text-slate-400 text-xs font-semibold uppercase mb-2">Leverage (dynamic)</p>
+        <p class="text-slate-400 text-xs font-semibold uppercase mb-2">SL / TP / Trailing</p>
         <div class="space-y-1">
-          <div>Sideways / Calm → 2× · Normal → 1.5× · Volatile / Extreme → 1× · Hard cap 3×</div>
+          <div><span class="text-white">SL</span> — structural swing high/low · capped at 2.5% max distance (5% worst-case at 2× lev)</div>
+          <div><span class="text-white">TP</span> — pattern measured move · Fibonacci extensions · 3% fixed fallback</div>
+          <div><span class="text-white">Min R:R</span> — 1.5× · trades below this are blocked at entry</div>
+          <div><span class="text-white">Trailing SL</span> — at 1R profit: SL moves to breakeven · then trails at 70% of peak gain</div>
+          <div><span class="text-white">Session breakout</span> — Asia/London/US open · BB expansion + volume ≥ 1.5× avg required</div>
         </div>
       </div>
 
       <div class="rounded-lg bg-slate-800 p-4">
-        <p class="text-slate-400 text-xs font-semibold uppercase mb-2">Senti-meter Signals → Action</p>
+        <p class="text-slate-400 text-xs font-semibold uppercase mb-2">Leverage (dynamic by macro regime)</p>
         <div class="space-y-1">
-          <div>≤ 10 → <b>OVERSOLD</b> — entries halted, open longs closing</div>
-          <div>≤ 18 → <b>BEARISH</b> — reduce sizes, wait for stabilisation</div>
-          <div>19–35 → <b>BEARISH</b> — caution, favour shorts</div>
+          <div>Calm / Sideways → 2× · Normal → 1.5× · Volatile / Extreme → 1× · Hard cap 3×</div>
+        </div>
+      </div>
+
+      <div class="rounded-lg bg-slate-800 p-4">
+        <p class="text-slate-400 text-xs font-semibold uppercase mb-2">Fear &amp; Greed → Action</p>
+        <div class="space-y-1">
+          <div>≤ 10 → <b>OVERSOLD</b> — all entries halted</div>
+          <div>11–35 → <b>BEARISH</b> — caution, favour shorts</div>
           <div>36–64 → <b>SIDEWAYS</b> — normal conditions</div>
-          <div>65–84 → <b>BULLISH</b> — normal conditions, favour longs</div>
-          <div>85–92 → <b>OVERBOUGHT</b> — tighten stops, avoid chasing entries</div>
-          <div>≥ 93 → <b>OVERBOUGHT</b> — reversal likely, no new longs</div>
+          <div>65–84 → <b>BULLISH</b> — favour longs</div>
+          <div>85–92 → <b>OVERBOUGHT</b> — tighten stops, no chasing</div>
+          <div>≥ 93 → <b>EXTREME GREED</b> — no new longs</div>
+        </div>
+      </div>
+
+      <div class="rounded-lg bg-slate-800 p-4">
+        <p class="text-slate-400 text-xs font-semibold uppercase mb-2">Self-Improvement Cycle</p>
+        <div class="space-y-1">
+          <div><span class="text-white">Every 5 trades</span> — reflection: WR, R:R, regime &amp; conviction tier breakdown</div>
+          <div><span class="text-white">Self-improve</span> — RSI thresholds, MTF gate, SL/TP pct, conviction tier capital — all auto-tuned via backtest</div>
+          <div><span class="text-white">After 8h silence</span> — downtime: idle diagnosis, OOS backtest, R:R bleed, shadow trade &amp; capital shadow review</div>
+          <div><span class="text-white">Shadow trading</span> — blocked setups tracked 48h · if shadow WR &gt;&gt; live WR → filters loosened</div>
+          <div><span class="text-white">Capital shadow</span> — every trade logs dynamic vs fixed $50 · downtime reports edge gained/lost</div>
         </div>
       </div>
 
@@ -605,31 +628,6 @@ _HTML = r"""<!DOCTYPE html>
       <div id="strategy-notes-section" class="rounded-lg bg-slate-800 p-4 hidden">
         <p class="text-slate-400 text-xs font-semibold uppercase mb-2">🤖 Hermes Notes <span id="strategy-notes-ts" class="text-slate-600 font-normal normal-case ml-1"></span></p>
         <div id="strategy-notes-list" class="space-y-1"></div>
-      </div>
-
-      <div class="rounded-lg bg-slate-800 p-4">
-        <p class="text-slate-400 text-xs font-semibold uppercase mb-2">Risk Management</p>
-        <div class="space-y-1">
-          <div><span class="text-white">Capital (dynamic)</span> — Low conviction $30 · Medium $50 · High $75 · Very high $100</div>
-          <div><span class="text-white">Conviction score</span> — HTF signals (0-2) + liquidity grab (+1) + 2+ patterns (+1) + RSI &lt;25/&gt;75 (+1)</div>
-          <div><span class="text-white">Stop Loss</span> — 1.8% from entry (structural swing high/low when available)</div>
-          <div><span class="text-white">Take Profit</span> — pattern-based (triple bottom, descending triangle etc.) or 3% fixed</div>
-          <div><span class="text-white">Trailing SL</span> — activates at 1R profit → moves to breakeven, then trails at 50% of peak gain</div>
-          <div><span class="text-white">Per-pair cap</span> — 10% drawdown → pair paused</div>
-          <div><span class="text-white">Portfolio cap</span> — 8% drawdown → all entries halted</div>
-          <div><span class="text-white">Post-SL cooldown</span> — 30 min wait after a stop-loss before re-entering same pair</div>
-        </div>
-      </div>
-
-      <div class="rounded-lg bg-slate-800 p-4">
-        <p class="text-slate-400 text-xs font-semibold uppercase mb-2">Self-Improvement Cycle</p>
-        <div class="space-y-1">
-          <div><span class="text-white">Every 5 trades</span> — reflection: WR, avg R:R, regime breakdown, pattern performance</div>
-          <div><span class="text-white">After 8h silence</span> — downtime: idle diagnosis, OOS backtest, R:R bleed check, shadow trade review</div>
-          <div><span class="text-white">R:R bleed check</span> — if pattern TP WR lags structural TP by &gt; 10pp (≥ 5 samples) → flags relaxed 0.75× R:R</div>
-          <div><span class="text-white">Shadow trading</span> — blocked setups tracked 48h forward to validate gates</div>
-          <div><span class="text-white">Trailing SL analysis</span> — compares trailed vs static trades; flags if trail stopping out too early or locking in more profit</div>
-        </div>
       </div>
 
     </div>
