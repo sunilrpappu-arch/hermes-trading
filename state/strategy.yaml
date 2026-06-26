@@ -77,7 +77,7 @@ conviction_sizing:
 # Phase 2: trail at 50% of peak gain (locks in half the move)
 trailing_sl:
   enabled:   true
-  trail_pct: 0.50
+  trail_pct: 0.70   # trail at 70% of peak — gives winners more room to run to TP
 
 session_breakout:
   enabled:              true
@@ -87,4 +87,4 @@ session_breakout:
   min_fg_score:         18
   max_fg_score:         85
 
-version: '25'
+version: '26'

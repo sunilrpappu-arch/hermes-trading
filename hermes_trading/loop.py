@@ -1257,8 +1257,8 @@ class TradingLoop:
                         candles_1h   = candles_1h_raw,
                         rng_high     = rng_high,
                         rng_low      = rng_low,
-                        min_rr       = 1.0,      # block R:R < 1:1
-                        max_sl_pct   = 0.04,     # hard cap: never risk >4%
+                        min_rr       = 1.5,      # block R:R < 1:1.5
+                        max_sl_pct   = 0.025,    # hard cap: 2.5% → 5% worst-case at 2x lev
                         min_sl_pct   = 0.003,
                         sl_buffer_pct= 0.003,
                         patterns_1h  = patterns_1h,
