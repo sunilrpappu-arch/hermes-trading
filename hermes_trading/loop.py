@@ -910,7 +910,7 @@ class TradingLoop:
                 # Phase 2: trail at 50% of peak gain beyond breakeven
                 trail_cfg     = strategy.get("trailing_sl", {})
                 trail_enabled = trail_cfg.get("enabled", True)
-                trail_pct     = float(trail_cfg.get("trail_pct", 0.50))
+                trail_pct     = float(trail_cfg.get("trail_pct", 0.70))
 
                 if trail_enabled and sl_lvl and tp_lvl:
                     entry_p  = float(self.open_position.get("entry_price", 0) or 0)
